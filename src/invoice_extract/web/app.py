@@ -252,7 +252,9 @@ def create_app(settings: Settings, workdir: Optional[Path] = None) -> FastAPI:
                 col = column(body.label, hint=hint, type=body.type, existing=[c.key for c in ws.columns])
             except InvoiceError as e:
                 raise HTTPException(400, str(e))
-            ws.columns.append(col)
+            # new columns go before a trailing Status column, as in the table people expect
+            at = len(ws.columns) - 1 if ws.columns and ws.columns[-1].key == "status" else len(ws.columns)
+            ws.columns.insert(at, col)
         refill_all()
         return column_dict(col)
 

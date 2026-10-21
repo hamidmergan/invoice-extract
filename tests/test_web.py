@@ -94,6 +94,8 @@ def test_add_column_from_click(tmp_path, server):
         col = res.json()
         assert col["key"] == "customer_no"
         assert "Kd.-Nr." in col["hint"]
+        keys = [c["key"] for c in client.get("/api/state").json()["columns"]]
+        assert keys[-2:] == ["customer_no", "status"]
         deadline = time.time() + 5
         while time.time() < deadline:
             row = client.get("/api/state").json()["files"][0]["row"]
@@ -183,3 +185,6 @@ def test_index_served(server):
         res = client.get("/")
         assert res.status_code == 200
         assert "text/html" in res.headers["content-type"]
+        assert "<title>invoice-extract</title>" in res.text
+        assert client.get("/static/app.js").status_code == 200
+        assert client.get("/static/style.css").status_code == 200
