@@ -1,0 +1,108 @@
+import datetime
+from decimal import Decimal
+
+from invoice_extract.normalize import display_variants, normalize
+
+
+def names(checks):
+    return [c.name for c in checks]
+
+
+def test_amount_german():
+    value, checks = normalize("amount", "1234.50", "1.234,50 €")
+    assert value == Decimal("1234.50")
+    assert checks == []
+
+
+def test_amount_english():
+    value, checks = normalize("amount", "1234.50", "1,234.50")
+    assert value == Decimal("1234.50")
+    assert checks == []
+
+
+def test_amount_ambiguous():
+    value, checks = normalize("amount", "1234", "1.234")
+    assert value == Decimal("1234")
+    assert names(checks) == ["amount_ambiguous"]
+    assert checks[0].level == "warning"
+
+
+def test_amount_mismatch():
+    value, checks = normalize("amount", "99.00", "1.234,50")
+    assert value == Decimal("99.00")
+    assert names(checks) == ["value_mismatch"]
+
+
+def test_amount_from_raw_when_llm_value_is_not_a_number():
+    value, checks = normalize("amount", "1.234,50", "EUR 1.234,50")
+    assert value == Decimal("1234.50")
+    assert checks == []
+
+
+def test_amount_unparsed_kept():
+    value, checks = normalize("amount", "n/a", "")
+    assert value == "n/a"
+    assert names(checks) == ["unparsed"]
+
+
+def test_date_iso_from_german():
+    value, checks = normalize("date", "2026-10-21", "21.10.2026")
+    assert value == datetime.date(2026, 10, 21)
+    assert checks == []
+
+
+def test_date_english_month_and_short_year():
+    assert normalize("date", "2026-10-21", "21 October 2026") == (datetime.date(2026, 10, 21), [])
+    assert normalize("date", "2026-10-21", "21.10.26") == (datetime.date(2026, 10, 21), [])
+
+
+def test_date_ambiguous():
+    value, checks = normalize("date", "2026-04-03", "03/04/2026")
+    assert value == datetime.date(2026, 4, 3)
+    assert names(checks) == ["date_ambiguous"]
+
+
+def test_date_mismatch():
+    value, checks = normalize("date", "2026-10-22", "21.10.2026")
+    assert value == datetime.date(2026, 10, 22)
+    assert names(checks) == ["value_mismatch"]
+
+
+def test_date_unparsed_kept():
+    value, checks = normalize("date", "sometime", "sometime")
+    assert value == "sometime"
+    assert names(checks) == ["unparsed"]
+
+
+def test_no_raw_no_checks():
+    assert normalize("date", "2026-10-21", None) == (datetime.date(2026, 10, 21), [])
+    assert normalize("amount", 12.5, "") == (Decimal("12.5"), [])
+
+
+def test_text_and_none():
+    assert normalize("text", "  ACME GmbH ", "") == ("ACME GmbH", [])
+    assert normalize("text", None, "") == (None, [])
+
+
+def test_iban_cleanup():
+    assert normalize("iban", "de89 3704 0044 0532 0130 00", "") == ("DE89370400440532013000", [])
+
+
+def test_display_variants_amount():
+    assert display_variants("amount", Decimal("1234.50")) == [
+        "1.234,50",
+        "1,234.50",
+        "1234,50",
+        "1234.50",
+        "1 234,50",
+    ]
+
+
+def test_display_variants_date_and_text():
+    assert display_variants("date", datetime.date(2026, 10, 21)) == [
+        "21.10.2026",
+        "21/10/2026",
+        "2026-10-21",
+        "10/21/2026",
+    ]
+    assert display_variants("text", "ACME") == ["ACME"]

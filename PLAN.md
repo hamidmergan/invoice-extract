@@ -9,7 +9,7 @@
 - [x] 2 Columns, templates, result types
 - [x] 3 PDF text, boxes, rendering
 - [x] 4 Type detection, e-invoice XML
-- [ ] 5 Normalization, checks
+- [x] 5 Normalization, checks
 - [ ] 6 LLM calls, fake server
 - [ ] 7 Pipeline
 - [ ] 8 Export
