@@ -19,10 +19,12 @@ from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from ..checks import run_checks
+from ..checks import duplicate_checks, run_checks
 from ..columns import RESERVED, STANDARD_COLUMNS, Column
 from ..config import Settings
 from ..core import _extract, _lazy_client
+from ..detect import embedded_xml
+from ..einvoice import parse_document
 from ..errors import InvoiceError
 from ..export import FORMATS, export, table_csv_path
 from ..normalize import normalize
@@ -138,10 +140,16 @@ def create_app(settings: Settings, workdir: Optional[Path] = None, allowed_hosts
             row = Row(path=str(entry.path), error=f"{type(e).__name__}: {e}")
         if "file" in row.cells:
             row.cells["file"].value = entry.name
+        row.path = entry.name  # checks and exports name the file as the user knows it
         with lock:
             entry.kind = row.kind
             entry.row = row
             entry.state = "done"
+            duplicate_checks(finished_rows(), ws.columns)
+
+    def finished_rows() -> List[Row]:
+        """Rows of finished files. Call under the lock."""
+        return [e.row for e in ws.files.values() if e.state == "done" and e.row is not None]
 
     @app.get("/")
     def index() -> FileResponse:
@@ -211,6 +219,18 @@ def create_app(settings: Settings, workdir: Optional[Path] = None, allowed_hosts
                 ws.pngs[(file_id, n)] = png
         return Response(png, media_type="image/png")
 
+    @app.get("/api/files/{file_id}/document")
+    def document(file_id: str) -> Dict[str, Any]:
+        """The e-invoice of an XML or ZUGFeRD file as a readable document."""
+        entry = entry_or_404(file_id)
+        if entry.kind not in ("xml", "zugferd"):
+            raise HTTPException(404, "This file holds no e-invoice data")
+        try:
+            data = entry.path.read_bytes() if entry.kind == "xml" else embedded_xml(entry.path)
+            return parse_document(data or b"")
+        except (InvoiceError, OSError) as e:
+            raise HTTPException(404, str(e))
+
     @app.patch("/api/files/{file_id}/cells/{key}")
     def edit_cell(file_id: str, key: str, body: CellEdit) -> Dict[str, Any]:
         entry = entry_or_404(file_id)
@@ -231,6 +251,7 @@ def create_app(settings: Settings, workdir: Optional[Path] = None, allowed_hosts
                                   edited=True, checks=checks, kind=col.kind, label=col.label, role=col.role,
                                   type=col.type)
             row.checks = run_checks(row, ws.columns)
+            duplicate_checks(finished_rows(), ws.columns)
             return _entry_dict(entry)
 
     @app.get("/api/export")

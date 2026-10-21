@@ -107,6 +107,19 @@ def test_cli_serve_guards_host_on_loopback(monkeypatch):
     assert client.get("/api/state", headers={"Host": "evil.example"}).status_code == 400
 
 
+def test_cli_serve_passes_template(monkeypatch, tmp_path):
+    import types
+    from fastapi.testclient import TestClient
+    template = tmp_path / "t.yaml"
+    template.write_text("name: t\ncolumns:\n  - label: Gross\n    type: amount\n", encoding="utf-8")
+    started = {}
+    monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=lambda app, **kw: started.update(app=app)))
+    assert main(["serve", "--template", str(template)]) == 0
+    client = TestClient(started["app"], base_url="http://127.0.0.1:8000")
+    assert [c["key"] for c in client.get("/api/state").json()["columns"]] == ["gross"]
+    assert main(["serve", "--template", str(tmp_path / "missing.yaml")]) == 2
+
+
 def test_cli_default_columns_are_standard(tmp_path, server, capsys):
     xml = write_samples(tmp_path)[2]
     out = tmp_path / "out.xlsx"

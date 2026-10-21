@@ -56,6 +56,7 @@ def _serve_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="invoice-extract serve", description="Start the web UI.")
     parser.add_argument("--host", default="127.0.0.1", help="address to listen on (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8000, help="port (default 8000)")
+    parser.add_argument("--template", help="YAML file with the table's columns (default: the standard columns)")
     _model_flags(parser)
     return parser
 
@@ -196,6 +197,7 @@ def _run_serve(argv: List[str]) -> int:
         return 2
     try:
         settings = resolve(**_options(args))
+        columns = Template.load(args.template).columns if args.template else None
     except InvoiceError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 2
@@ -203,7 +205,7 @@ def _run_serve(argv: List[str]) -> int:
         print(NO_LOGIN, file=sys.stderr)
     # on loopback, only accept our own host names, so other web pages cannot reach the UI via DNS rebinding
     allowed = list(LOOPBACK) if args.host in LOOPBACK else None
-    uvicorn.run(create_app(settings, allowed_hosts=allowed), host=args.host, port=args.port)
+    uvicorn.run(create_app(settings, allowed_hosts=allowed, columns=columns), host=args.host, port=args.port)
     return 0
 
 

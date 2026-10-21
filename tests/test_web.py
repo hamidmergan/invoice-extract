@@ -167,3 +167,30 @@ def test_host_and_origin_guard(server):
     with client_for(resolve()) as client:
         evil = {"Origin": "http://evil.example"}
         assert client.delete("/api/files", headers=evil).status_code == 403
+
+
+def test_document_route(tmp_path, server):
+    paths = write_samples(tmp_path)
+    with client_for(resolve()) as client:
+        ids = {p.name: upload(client, p).json()["files"][0]["id"] for p in paths}
+        wait_done(client)
+        doc = client.get(f"/api/files/{ids['xrechnung.xml']}/document")
+        assert doc.status_code == 200 and doc.json()["number"] == "RE-2026-001"
+        assert client.get(f"/api/files/{ids['zugferd.pdf']}/document").json()["seller"]["name"] == "ACME GmbH"
+        assert client.get(f"/api/files/{ids['digital.pdf']}/document").status_code == 404
+        assert client.get(f"/api/files/{ids['scan.png']}/document").status_code == 404
+        assert client.get("/api/files/nope/document").status_code == 404
+
+
+def test_duplicates_across_uploads(tmp_path, server):
+    xml = write_samples(tmp_path)[2]
+    with client_for(resolve()) as client:
+        upload(client, xml)
+        second = upload(client, xml).json()["files"][0]["id"]
+        state = wait_done(client)
+        assert [f["status"] for f in state["files"]] == ["warning", "warning"]
+        messages = [c["message"] for c in state["files"][0]["row"]["checks"]]
+        assert "Same invoice number as xrechnung.xml" in messages
+        assert client.patch(f"/api/files/{second}/cells/invoice_no", json={"value": "RE-2"}).status_code == 200
+        state = client.get("/api/state").json()
+        assert [f["status"] for f in state["files"]] == ["ok", "ok"]

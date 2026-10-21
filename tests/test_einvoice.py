@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from invoice_extract.einvoice import parse_xml, xml_text
+from invoice_extract.einvoice import parse_document, parse_xml, xml_text
 from invoice_extract.errors import UnsupportedFileError
 
 from pdfgen import SAMPLE, cii_xml, ubl_xml
@@ -111,3 +111,50 @@ def test_parse_line_items_cii_and_ubl():
     expected = [{"Description": "Paper", "Quantity": "10", "Unit Price": "10.00", "Amount": "100.00"}]
     assert parse_line_items(cii_xml()) == expected
     assert parse_line_items(ubl_xml()) == expected
+
+
+EXPECTED_DOCUMENT = {
+    "kind": "invoice", "number": "RE-2026-001", "issue_date": "2026-10-21", "due_date": "2026-11-20",
+    "delivery_date": "", "period_start": "", "period_end": "", "currency": "EUR",
+    "buyer_reference": "04011000-12345-03", "order_reference": "",
+    "seller": {"name": "ACME GmbH", "street": "Main St 1", "postcode": "12345", "city": "Berlin", "country": "DE",
+               "vat_id": "DE123456789", "tax_number": "", "email": "", "phone": "", "contact": ""},
+    "buyer": {"name": "Buyer AG", "street": "Market 2", "postcode": "54321", "city": "Hamburg", "country": "DE",
+              "vat_id": "", "tax_number": "", "email": "", "phone": "", "contact": ""},
+    "lines": [{"description": "Paper", "quantity": "10", "unit": "C62", "unit_price": "10.00", "vat_rate": "",
+               "amount": "100.00"}],
+    "taxes": [{"category": "S", "rate": "19.00", "basis": "100.00", "tax": "19.00"}],
+    "totals": {"lines": "100.00", "allowances": "", "charges": "", "net": "100.00", "vat": "19.00",
+               "gross": "119.00", "prepaid": "", "due": "119.00"},
+    "payment": {"means": "SEPA credit transfer", "iban": "DE89370400440532013000", "bic": "COBADEFFXXX",
+                "account_name": "", "terms": "Payable within 30 days", "mandate_reference": ""},
+    "notes": ["Thank you for your order."],
+}
+
+
+def test_parse_document_cii():
+    assert parse_document(cii_xml()) == EXPECTED_DOCUMENT
+
+
+def test_parse_document_ubl():
+    assert parse_document(ubl_xml()) == EXPECTED_DOCUMENT
+
+
+def test_parse_document_credit_note_and_unknown_means():
+    data = ubl_xml().replace(b"<Invoice ", b"<CreditNote ").replace(b"</Invoice>", b"</CreditNote>")
+    data = data.replace(b"<cbc:PaymentMeansCode>58<", b"<cbc:PaymentMeansCode>42<")
+    doc = parse_document(data)
+    assert doc["kind"] == "credit note" and doc["payment"]["means"] == "42"
+
+
+def test_parse_document_missing_parts_are_empty():
+    doc = parse_document(b"""<rsm:CrossIndustryInvoice
+        xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"
+        xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100">
+        <rsm:ExchangedDocument><ram:ID>X-1</ram:ID></rsm:ExchangedDocument></rsm:CrossIndustryInvoice>""")
+    assert doc["number"] == "X-1" and doc["kind"] == ""
+    assert doc["seller"]["name"] == "" and doc["lines"] == [] and doc["taxes"] == [] and doc["notes"] == []
+    assert doc["totals"]["gross"] == "" and doc["payment"]["iban"] == ""
+    assert set(doc) == set(EXPECTED_DOCUMENT)
+    with pytest.raises(UnsupportedFileError):
+        parse_document(b"<Order/>")

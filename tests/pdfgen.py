@@ -93,6 +93,7 @@ def cii_xml(**values) -> bytes:
     <ram:ID>{v["invoice_no"]}</ram:ID>
     <ram:TypeCode>380</ram:TypeCode>
     <ram:IssueDateTime><udt:DateTimeString format="102">{issue}</udt:DateTimeString></ram:IssueDateTime>
+    <ram:IncludedNote><ram:Content>Thank you for your order.</ram:Content></ram:IncludedNote>
   </rsm:ExchangedDocument>
   <rsm:SupplyChainTradeTransaction>
     <ram:IncludedSupplyChainTradeLineItem>
@@ -108,15 +109,33 @@ def cii_xml(**values) -> bytes:
       </ram:SpecifiedLineTradeSettlement>
     </ram:IncludedSupplyChainTradeLineItem>
     <ram:ApplicableHeaderTradeAgreement>
+      <ram:BuyerReference>04011000-12345-03</ram:BuyerReference>
       <ram:SellerTradeParty>
         <ram:Name>{v["supplier"]}</ram:Name>
+        <ram:PostalTradeAddress>
+          <ram:PostcodeCode>12345</ram:PostcodeCode>
+          <ram:LineOne>Main St 1</ram:LineOne>
+          <ram:CityName>Berlin</ram:CityName>
+          <ram:CountryID>DE</ram:CountryID>
+        </ram:PostalTradeAddress>
         <ram:SpecifiedTaxRegistration><ram:ID schemeID="VA">{v["supplier_vat_id"]}</ram:ID></ram:SpecifiedTaxRegistration>
       </ram:SellerTradeParty>
+      <ram:BuyerTradeParty>
+        <ram:Name>Buyer AG</ram:Name>
+        <ram:PostalTradeAddress>
+          <ram:PostcodeCode>54321</ram:PostcodeCode>
+          <ram:LineOne>Market 2</ram:LineOne>
+          <ram:CityName>Hamburg</ram:CityName>
+          <ram:CountryID>DE</ram:CountryID>
+        </ram:PostalTradeAddress>
+      </ram:BuyerTradeParty>
     </ram:ApplicableHeaderTradeAgreement>
     <ram:ApplicableHeaderTradeSettlement>
       <ram:InvoiceCurrencyCode>{v["currency"]}</ram:InvoiceCurrencyCode>
       <ram:SpecifiedTradeSettlementPaymentMeans>
+        <ram:TypeCode>58</ram:TypeCode>
         <ram:PayeePartyCreditorFinancialAccount><ram:IBANID>{v["iban"]}</ram:IBANID></ram:PayeePartyCreditorFinancialAccount>
+        <ram:PayeeSpecifiedCreditorFinancialInstitution><ram:BICID>COBADEFFXXX</ram:BICID></ram:PayeeSpecifiedCreditorFinancialInstitution>
       </ram:SpecifiedTradeSettlementPaymentMeans>
       <ram:ApplicableTradeTax>
         <ram:CalculatedAmount>{v["vat"]}</ram:CalculatedAmount>
@@ -126,12 +145,15 @@ def cii_xml(**values) -> bytes:
         <ram:RateApplicablePercent>{v["vat_rate"]}</ram:RateApplicablePercent>
       </ram:ApplicableTradeTax>
       <ram:SpecifiedTradePaymentTerms>
+        <ram:Description>Payable within 30 days</ram:Description>
         <ram:DueDateDateTime><udt:DateTimeString format="102">{due}</udt:DateTimeString></ram:DueDateDateTime>
       </ram:SpecifiedTradePaymentTerms>
       <ram:SpecifiedTradeSettlementHeaderMonetarySummation>
+        <ram:LineTotalAmount>{v["net"]}</ram:LineTotalAmount>
         <ram:TaxBasisTotalAmount>{v["net"]}</ram:TaxBasisTotalAmount>
         <ram:TaxTotalAmount currencyID="{v["currency"]}">{v["vat"]}</ram:TaxTotalAmount>
         <ram:GrandTotalAmount>{v["gross"]}</ram:GrandTotalAmount>
+        <ram:DuePayableAmount>{v["gross"]}</ram:DuePayableAmount>
       </ram:SpecifiedTradeSettlementHeaderMonetarySummation>
     </ram:ApplicableHeaderTradeSettlement>
   </rsm:SupplyChainTradeTransaction>
@@ -155,10 +177,18 @@ def ubl_xml(party_name_only: bool = False, **values) -> bytes:
   <cbc:IssueDate>{v["invoice_date"]}</cbc:IssueDate>
   <cbc:DueDate>{v["due_date"]}</cbc:DueDate>
   <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>
+  <cbc:Note>Thank you for your order.</cbc:Note>
   <cbc:DocumentCurrencyCode>{v["currency"]}</cbc:DocumentCurrencyCode>
+  <cbc:BuyerReference>04011000-12345-03</cbc:BuyerReference>
   <cac:AccountingSupplierParty>
     <cac:Party>
       <cac:PartyName><cbc:Name>{v["supplier"]}</cbc:Name></cac:PartyName>
+      <cac:PostalAddress>
+        <cbc:StreetName>Main St 1</cbc:StreetName>
+        <cbc:CityName>Berlin</cbc:CityName>
+        <cbc:PostalZone>12345</cbc:PostalZone>
+        <cac:Country><cbc:IdentificationCode>DE</cbc:IdentificationCode></cac:Country>
+      </cac:PostalAddress>
       <cac:PartyTaxScheme>
         <cbc:CompanyID>{v["supplier_vat_id"]}</cbc:CompanyID>
         <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
@@ -166,9 +196,25 @@ def ubl_xml(party_name_only: bool = False, **values) -> bytes:
       {legal}
     </cac:Party>
   </cac:AccountingSupplierParty>
+  <cac:AccountingCustomerParty>
+    <cac:Party>
+      <cac:PartyName><cbc:Name>Buyer AG</cbc:Name></cac:PartyName>
+      <cac:PostalAddress>
+        <cbc:StreetName>Market 2</cbc:StreetName>
+        <cbc:CityName>Hamburg</cbc:CityName>
+        <cbc:PostalZone>54321</cbc:PostalZone>
+        <cac:Country><cbc:IdentificationCode>DE</cbc:IdentificationCode></cac:Country>
+      </cac:PostalAddress>
+    </cac:Party>
+  </cac:AccountingCustomerParty>
   <cac:PaymentMeans>
-    <cac:PayeeFinancialAccount><cbc:ID>{v["iban"]}</cbc:ID></cac:PayeeFinancialAccount>
+    <cbc:PaymentMeansCode>58</cbc:PaymentMeansCode>
+    <cac:PayeeFinancialAccount>
+      <cbc:ID>{v["iban"]}</cbc:ID>
+      <cac:FinancialInstitutionBranch><cbc:ID>COBADEFFXXX</cbc:ID></cac:FinancialInstitutionBranch>
+    </cac:PayeeFinancialAccount>
   </cac:PaymentMeans>
+  <cac:PaymentTerms><cbc:Note>Payable within 30 days</cbc:Note></cac:PaymentTerms>
   <cac:TaxTotal>
     <cbc:TaxAmount currencyID="{v["currency"]}">{v["vat"]}</cbc:TaxAmount>
     <cac:TaxSubtotal>
@@ -178,8 +224,10 @@ def ubl_xml(party_name_only: bool = False, **values) -> bytes:
     </cac:TaxSubtotal>
   </cac:TaxTotal>
   <cac:LegalMonetaryTotal>
+    <cbc:LineExtensionAmount currencyID="{v["currency"]}">{v["net"]}</cbc:LineExtensionAmount>
     <cbc:TaxExclusiveAmount currencyID="{v["currency"]}">{v["net"]}</cbc:TaxExclusiveAmount>
     <cbc:TaxInclusiveAmount currencyID="{v["currency"]}">{v["gross"]}</cbc:TaxInclusiveAmount>
+    <cbc:PayableAmount currencyID="{v["currency"]}">{v["gross"]}</cbc:PayableAmount>
   </cac:LegalMonetaryTotal>
   <cac:InvoiceLine>
     <cbc:ID>1</cbc:ID>
