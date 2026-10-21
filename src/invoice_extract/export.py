@@ -3,10 +3,11 @@
 import csv
 import datetime
 import json
+import re
 from dataclasses import asdict
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, List, Optional, Union
+from typing import Any, List, Optional, Set, Tuple, Union
 
 from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
@@ -53,6 +54,8 @@ def _details(rows: List[Row], columns: List[Column]) -> List[List[Any]]:
             out.append([name, "(error)", None, "", "", None, False, f"error: {row.error}"])
             continue
         for key, cell in row.cells.items():
+            if key not in labels:
+                continue
             out.append([name, labels.get(key, key), cell.value, cell.raw, cell.source, cell.page, cell.edited,
                         _checks(cell.checks)])
         if row.checks:
@@ -99,12 +102,66 @@ def _sheet(ws, header: List[str], records: List[List[Any]]) -> None:
     ws.freeze_panes = "A2"
 
 
+def _plain(columns: List[Column]) -> List[Column]:
+    return [c for c in columns if c.kind != "table"]
+
+
+def _tables(columns: List[Column]) -> List[Column]:
+    return [c for c in columns if c.kind == "table"]
+
+
+def _table(rows: List[Row], column: Column) -> Tuple[List[str], List[List[Any]]]:
+    """Header and records of one table field: one record per table row, linked to its invoice."""
+    cells = [(row, row.cells.get(column.key)) for row in rows if not row.error]
+    names = list(column.table_columns)
+    for _, cell in cells:
+        if cell is not None:
+            names.extend(n for n in cell.columns if n not in names)
+    numbered = any(row.cells.get("invoice_no") is not None and row.cells["invoice_no"].value not in (None, "")
+                   for row, _ in cells)
+    header = ["File"] + (["Invoice No."] if numbered else []) + names
+    records = []
+    for row, cell in cells:
+        if cell is None or not isinstance(cell.value, list):
+            continue
+        number = row.cells.get("invoice_no")
+        lead = [Path(row.path).name] + ([number.value if number is not None else None] if numbered else [])
+        for line in cell.value:
+            line = line if isinstance(line, dict) else {}
+            records.append(lead + [line.get(n) for n in names])
+    return header, records
+
+
+def _sheet_title(label: str, used: Set[str]) -> str:
+    """A valid, unused Excel sheet name: no []:*?/\\, at most 31 characters."""
+    base = re.sub(r"[\[\]:*?/\\]", "", label).strip() or "Table"
+    base = base[:31]
+    title, n = base, 2
+    while title.lower() in {u.lower() for u in used}:
+        suffix = f" ({n})"
+        title = base[:31 - len(suffix)] + suffix
+        n += 1
+    used.add(title)
+    return title
+
+
+def table_csv_path(path: Union[str, Path], column: Column) -> Path:
+    """Where the CSV export writes a table field: next to the main file."""
+    path = Path(path)
+    return path.with_name(f"{path.stem}-{column.key}.csv")
+
+
 def _xlsx(rows: List[Row], path: Path, columns: List[Column]) -> None:
     wb = Workbook()
     ws = wb.active
     ws.title = "Invoices"
-    _sheet(ws, [c.label for c in columns], [[_cell_value(r, c) for c in columns] for r in rows])
-    _sheet(wb.create_sheet("Details"), DETAILS_HEADER, _details(rows, columns))
+    plain = _plain(columns)
+    _sheet(ws, [c.label for c in plain], [[_cell_value(r, c) for c in plain] for r in rows])
+    _sheet(wb.create_sheet("Details"), DETAILS_HEADER, _details(rows, plain))
+    used = {"Invoices", "Details"}
+    for column in _tables(columns):
+        header, records = _table(rows, column)
+        _sheet(wb.create_sheet(_sheet_title(column.label, used)), header, records)
     wb.save(path)
 
 
@@ -117,16 +174,29 @@ def _csv_text(value: Any) -> str:
     return str(_value(value))
 
 
-def _csv(rows: List[Row], path: Path, columns: List[Column]) -> None:
+def _write_csv(path: Path, header: List[str], records: List[List[Any]]) -> None:
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([_csv_text(c.label) for c in columns])
-        for row in rows:
-            writer.writerow([_csv_text(_cell_value(row, c)) for c in columns])
+        writer.writerow([_csv_text(h) for h in header])
+        for record in records:
+            writer.writerow([_csv_text(v) for v in record])
+
+
+def _csv(rows: List[Row], path: Path, columns: List[Column]) -> None:
+    plain = _plain(columns)
+    _write_csv(path, [c.label for c in plain], [[_cell_value(r, c) for c in plain] for r in rows])
+    for column in _tables(columns):
+        _write_csv(table_csv_path(path, column), *_table(rows, column))
 
 
 def _json(rows: List[Row], path: Path, columns: List[Column]) -> None:
-    data = {"columns": [asdict(c) for c in columns], "rows": [r.to_dict() for r in rows]}
+    keys = {c.key for c in columns}
+    records = []
+    for row in rows:
+        record = row.to_dict()
+        record["cells"] = {k: v for k, v in record["cells"].items() if k in keys}
+        records.append(record)
+    data = {"columns": [asdict(c) for c in columns], "rows": records}
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 

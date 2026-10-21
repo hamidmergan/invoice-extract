@@ -133,3 +133,76 @@ def test_xlsx_header_formula_is_text(tmp_path):
     cell = openpyxl.load_workbook(tmp_path / "out.xlsx")["Invoices"]["A1"]
     assert cell.data_type == "s"
     assert cell.value == label
+
+
+# --- tables and selection (v2) ---
+
+from invoice_extract import Column  # noqa: E402
+
+
+def table_row(name, rows, columns=("Description", "Amount"), invoice_no="R-1"):
+    cells = {"lines": Cell(value=rows, kind="table", label="Line Items", columns=list(columns))}
+    if invoice_no:
+        cells["invoice_no"] = Cell(value=invoice_no, label="Invoice No.")
+    return Row(path=name, kind="pdf", cells=cells)
+
+
+LINES = Column("lines", "Line Items", kind="table", table_columns=["Description", "Amount"])
+INVOICE_NO = Column("invoice_no", "Invoice No.")
+
+
+def test_table_sheet(tmp_path):
+    rows = [table_row("a.pdf", [{"Description": "Paper", "Amount": "100,00"}, {"Description": "Toner", "Amount": "19"}])]
+    export(rows, tmp_path / "out.xlsx", [STANDARD_COLUMNS[0], INVOICE_NO, LINES])
+    wb = openpyxl.load_workbook(tmp_path / "out.xlsx")
+    ws = wb["Line Items"]
+    assert [c.value for c in ws[1]] == ["File", "Invoice No.", "Description", "Amount"]
+    assert [c.value for c in ws[2]] == ["a.pdf", "R-1", "Paper", "100,00"] and ws.max_row == 3
+    assert [c.value for c in wb["Invoices"][1]] == ["File", "Invoice No."]
+
+
+def test_sheet_titles_cleaned_and_unique(tmp_path):  # Review Focus 4
+    cols = [Column("t1", "Lines [EUR]/*?", kind="table", table_columns=["A"]),
+            Column("t2", "A very long table name that goes on and on", kind="table", table_columns=["A"]),
+            Column("t3", "Lines [EUR]/*?", kind="table", table_columns=["A"]),
+            Column("t4", "Invoices", kind="table", table_columns=["A"])]
+    row = Row(path="a.pdf", cells={c.key: Cell(value=[{"A": "1"}], kind="table", columns=["A"]) for c in cols})
+    export([row], tmp_path / "out.xlsx", cols)
+    titles = openpyxl.load_workbook(tmp_path / "out.xlsx").sheetnames
+    assert len(titles) == len(set(titles)) == 6
+    assert all(len(t) <= 31 and not set(t) & set("[]:*?/\\") for t in titles)
+
+
+def test_ragged_table_rows_export(tmp_path):  # Review Focus 3
+    rows = [table_row("a.pdf", [{"Description": "Paper"}, {"Description": 7, "Amount": None}])]
+    cols = [STANDARD_COLUMNS[0], LINES]
+    for fmt in ("xlsx", "csv", "json"):
+        export(rows, tmp_path / f"out.{fmt}", cols)
+    ws = openpyxl.load_workbook(tmp_path / "out.xlsx")["Line Items"]
+    assert [c.value for c in ws[2]][2:] == ["Paper", None]
+
+
+def test_csv_writes_table_files(tmp_path):
+    from invoice_extract.export import table_csv_path
+    rows = [table_row("a.pdf", [{"Description": "Paper", "Amount": "1"}])]
+    export(rows, tmp_path / "out.csv", [STANDARD_COLUMNS[0], INVOICE_NO, LINES])
+    side = table_csv_path(tmp_path / "out.csv", LINES)
+    assert side == tmp_path / "out-lines.csv"
+    lines = list(csv.reader(side.read_text(encoding="utf-8-sig").splitlines()))
+    assert lines == [["File", "Invoice No.", "Description", "Amount"], ["a.pdf", "R-1", "Paper", "1"]]
+    assert list(csv.reader((tmp_path / "out.csv").read_text(encoding="utf-8-sig").splitlines()))[0] == \
+        ["File", "Invoice No."]
+
+
+def test_json_has_selected_fields_only(tmp_path):
+    row = Row(path="a.pdf", cells={"keep": Cell(value="1", label="Keep"), "drop": Cell(value="2", label="Drop")})
+    export([row], tmp_path / "out.json", [Column("keep", "Keep")])
+    data = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert list(data["rows"][0]["cells"]) == ["keep"]
+
+
+def test_text_block_in_invoices_sheet(tmp_path):
+    text = "Please pay within 14 days.\nThank you."
+    row = Row(path="a.pdf", cells={"note": Cell(value=text, kind="text", label="Note")})
+    export([row], tmp_path / "out.xlsx", [Column("note", "Note", kind="text")])
+    assert openpyxl.load_workbook(tmp_path / "out.xlsx")["Invoices"]["A2"].value == text
