@@ -40,3 +40,11 @@ def test_dict_roundtrip():
         from_dict({**data, "issue_date": "31.02.2025"})
     with pytest.raises(ConfigError, match="lines.0.quantity"):
         from_dict({**data, "lines": [{**data["lines"][0], "quantity": "two"}]})
+
+
+def test_rounding_amount_matches_printed_gross():
+    inv = EInvoice(lines=[Line(description="Plan", unit_price=Decimal("10.0756"), vat_rate=Decimal("19"),
+                               amount=Decimal("10.0756"))], printed_gross=Decimal("11.99"))
+    t = totals(inv)
+    assert (t.grand_total, t.rounding, t.due) == (Decimal("12.00"), Decimal("-0.01"), Decimal("11.99"))
+    assert totals(EInvoice(lines=inv.lines)).rounding == Decimal("0.00")

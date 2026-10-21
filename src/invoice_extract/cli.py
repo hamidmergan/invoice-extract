@@ -11,6 +11,9 @@ from .config import resolve
 from .core import extract_many
 from .discover import fields_of
 from .errors import ConfigError, InvoiceError
+from .einvoicing import FORMATS as FORMATS_E
+from .einvoicing import convert_many, write
+from .einvoicing.profile import load_profile
 from .export import FORMATS, export
 
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
@@ -37,7 +40,8 @@ def _extract_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="invoice-extract",
         description="Turn invoices (PDF, scans, e-invoices) into one table. Without --template or --column, "
-                    "every field the model finds is exported. Run 'invoice-extract serve' for the web UI.",
+                    "every field the model finds is exported. Run 'invoice-extract einvoice' to write "
+                    "XRechnung/ZUGFeRD e-invoices and 'invoice-extract serve' for the web UI.",
     )
     parser.add_argument("files", nargs="+", metavar="FILE", help="PDF, image or XML invoices")
     parser.add_argument("-o", "--output", help="output file (.xlsx, .csv or .json); default invoices.xlsx")
@@ -123,6 +127,53 @@ def _run_extract(argv: List[str]) -> int:
     return 1 if any(r.error for r in rows) else 0
 
 
+def _einvoice_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="invoice-extract einvoice",
+        description="Turn normal invoices (PDF, scan, photo) into e-invoices: XRechnung (CII XML) or ZUGFeRD "
+                    "(PDF with the XML inside). Invalid invoices are not written; their problems are listed.",
+    )
+    parser.add_argument("files", nargs="+", metavar="FILE", help="PDF or image invoices")
+    parser.add_argument("--format", choices=FORMATS_E, default="xrechnung", help="output format (default xrechnung)")
+    parser.add_argument("--profile", help="YAML file with your company's seller data")
+    parser.add_argument("-o", "--output", default=".", help="output folder (default: current folder)")
+    _model_flags(parser)
+    return parser
+
+
+def _run_einvoice(argv: List[str]) -> int:
+    args = _einvoice_parser().parse_args(argv)
+    try:
+        profile = load_profile(args.profile) if args.profile else None
+        out_dir = Path(args.output)
+        if not out_dir.is_dir():
+            raise ConfigError(f"Output folder does not exist: {out_dir}")
+        conversions = convert_many(args.files, profile=profile, **_options(args))
+    except InvoiceError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
+    failed = 0
+    for conv in conversions:
+        name = Path(conv.path).name
+        if conv.error:
+            print(f"{name}: error: {conv.error}", file=sys.stderr)
+            failed += 1
+            continue
+        issues = conv.issues(args.format)
+        problems = [i for i in issues if i.level == "error"]
+        if problems:
+            failed += 1
+            print(f"{name}: {len(problems)} problem{'s' if len(problems) != 1 else ''}", file=sys.stderr)
+            for issue in problems:
+                print(f"  - {issue.field}: {issue.message} [{issue.rule}]", file=sys.stderr)
+            continue
+        path = write(conv, args.format, out_dir)
+        print(f"{name}: written {path}", file=sys.stderr)
+        for issue in issues:
+            print(f"  (warning) {issue.field}: {issue.message} [{issue.rule}]", file=sys.stderr)
+    return 1 if failed else 0
+
+
 def _run_serve(argv: List[str]) -> int:
     args = _serve_parser().parse_args(argv)
     try:
@@ -149,6 +200,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "serve":
         return _run_serve(argv[1:])
+    if argv and argv[0] == "einvoice":
+        return _run_einvoice(argv[1:])
     return _run_extract(argv)
 
 

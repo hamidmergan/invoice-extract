@@ -55,3 +55,14 @@ def test_build_cii_notes_and_period():
                         period_end=datetime.date(2026, 10, 31), delivery_date=datetime.date(2026, 10, 15))
     xml = build_cii(inv, "xrechnung").decode()
     assert "Thank you." in xml and "20261001" in xml and "20261015" in xml
+
+
+def test_build_cii_rounding_amount():
+    from decimal import Decimal
+    from invoice_extract.einvoicing.model import Line
+    inv = valid_invoice(lines=[Line(description="Plan", unit_price=Decimal("10.0756"), vat_rate=Decimal("19"),
+                                    amount=Decimal("10.0756"))],
+                        printed_net=Decimal("10.0756"), printed_vat=Decimal("1.9144"), printed_gross=Decimal("11.99"))
+    xml = build_cii(inv, "xrechnung").decode()
+    assert "<ram:RoundingAmount>-0.01</ram:RoundingAmount>" in xml
+    assert "<ram:DuePayableAmount>11.99</ram:DuePayableAmount>" in xml

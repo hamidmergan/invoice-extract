@@ -117,3 +117,28 @@ def test_cli_discovery_default(tmp_path, server, capsys):
     ws = openpyxl.load_workbook(out)["Invoices"]
     assert [c.value for c in ws[1]] == ["File", "Invoice No.", "Customer No.", "Status"]
     assert "Found 2 fields" in capsys.readouterr().err
+
+
+def test_cli_einvoice(tmp_path, server, capsys):
+    from test_einvoicing_convert import reply
+    pdf = write_samples(tmp_path)[0]
+    server.reply = reply()
+    profile = tmp_path / "company.yaml"
+    profile.write_text("seller:\n  name: My Shop GmbH\n", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    code = main(["einvoice", str(pdf), "-o", str(out), "--profile", str(profile)] + llm_flags(server))
+    assert code == 0, capsys.readouterr().err
+    assert (out / "digital.xml").exists()
+    assert b"My Shop GmbH" in (out / "digital.xml").read_bytes()
+    assert "digital.pdf: written" in capsys.readouterr().err
+
+
+def test_cli_einvoice_problems(tmp_path, server, capsys):
+    from test_einvoicing_convert import reply
+    pdf = write_samples(tmp_path)[0]
+    server.reply = reply(buyer_email=None)
+    assert main(["einvoice", str(pdf), "-o", str(tmp_path)] + llm_flags(server)) == 1
+    err = capsys.readouterr().err
+    assert "digital.pdf: 1 problem" in err and "buyer.email" in err
+    assert main(["einvoice", str(pdf), "--profile", str(tmp_path / "missing.yaml")] + llm_flags(server)) == 2

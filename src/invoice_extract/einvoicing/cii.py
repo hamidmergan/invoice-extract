@@ -116,6 +116,8 @@ def build_cii(inv: EInvoice, format: str) -> bytes:
     summary.tax_basis_total = t.tax_basis
     summary.tax_total = (t.tax_total, inv.currency)
     summary.grand_total = t.grand_total
+    if t.rounding:
+        summary.rounding_amount = t.rounding
     summary.due_amount = t.due
 
     for i, line in enumerate(inv.lines, 1):

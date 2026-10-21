@@ -30,7 +30,8 @@ EINVOICE_FIELDS: List[Column] = [
     _f("seller_vat_id", "Seller VAT ID", "VAT identification number of the seller (USt-IdNr.), e.g. DE123456789."),
     _f("seller_tax_number", "Seller Tax Number", "Tax number of the seller (Steuernummer), if printed."),
     _f("seller_contact", "Seller Contact", "Contact person at the seller, if printed."),
-    _f("seller_phone", "Seller Phone", "Phone number of the seller."),
+    _f("seller_phone", "Seller Phone", "Phone number of the seller's office or hotline; not the customer's phone "
+                                       "number, contract number or 'Rufnummer' on a phone bill."),
     _f("seller_email", "Seller E-mail", "E-mail address of the seller."),
     _f("buyer_name", "Buyer", "Name of the invoice recipient (company or person)."),
     _f("buyer_street", "Buyer Street", "Street and house number of the buyer."),

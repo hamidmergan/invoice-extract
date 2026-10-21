@@ -77,6 +77,7 @@ class Totals:
     tax_basis: Decimal
     tax_total: Decimal
     grand_total: Decimal
+    rounding: Decimal  # BT-114: brings the amount due to the printed gross when the invoice rounded differently
     due: Decimal
 
 
@@ -113,7 +114,10 @@ def totals(inv: EInvoice) -> Totals:
     line_total = cents(sum((line_amount(line) for line in inv.lines), Decimal("0.00")))
     tax_total = cents(sum((g.tax for g in tax_groups(inv)), Decimal("0.00")))
     grand = line_total + tax_total
-    return Totals(line_total, line_total, tax_total, grand, grand)
+    rounding = Decimal("0.00")
+    if inv.printed_gross is not None and abs(cents(inv.printed_gross) - grand) <= CENT:
+        rounding = cents(inv.printed_gross) - grand  # e.g. prices with 4 decimals: 11.99 printed, 12.00 by EN 16931
+    return Totals(line_total, line_total, tax_total, grand, rounding, grand + rounding)
 
 
 # --- JSON-safe dicts, for the web UI ---------------------------------------------------------
