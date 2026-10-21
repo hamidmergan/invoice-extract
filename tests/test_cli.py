@@ -35,7 +35,7 @@ def test_cli_column_flag_and_template(tmp_path, server, capsys):
     body = json.dumps(server.requests[0]["body"])
     assert "order_no" in body and "supplier" in body
     ws = openpyxl.load_workbook(out)["Invoices"]
-    assert [c.value for c in ws[1]] == ["Supplier", "Gross", "Order No."]
+    assert [c.value for c in ws[1]] == ["File", "Supplier", "Gross", "Order No.", "Status"]
 
 
 def test_cli_exit_code_on_error(tmp_path, server, capsys):
@@ -116,7 +116,7 @@ def test_cli_serve_passes_template(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=lambda app, **kw: started.update(app=app)))
     assert main(["serve", "--template", str(template)]) == 0
     client = TestClient(started["app"], base_url="http://127.0.0.1:8000")
-    assert [c["key"] for c in client.get("/api/state").json()["columns"]] == ["gross"]
+    assert [c["key"] for c in client.get("/api/state").json()["columns"]] == ["file", "gross", "status"]
     assert main(["serve", "--template", str(tmp_path / "missing.yaml")]) == 2
 
 

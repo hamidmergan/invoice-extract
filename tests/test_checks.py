@@ -78,16 +78,17 @@ def test_vat_rate_mixed_or_missing_not_checked():
                    "vat_rate") == []
 
 
-def test_vat_id_missing_from_250():
+def test_vat_id_missing_above_250():
     small = run_checks(make_row(**FULL), STANDARD_COLUMNS)
     assert by_name(small, "vat_id_missing") == []
-    big = make_row(**{**FULL, "gross": Decimal("250.00")})
+    assert by_name(run_checks(make_row(**{**FULL, "gross": Decimal("250.00")}), STANDARD_COLUMNS), "vat_id_missing") == []
+    big = make_row(**{**FULL, "gross": Decimal("250.01")})
     [check] = by_name(run_checks(big, STANDARD_COLUMNS), "vat_id_missing")
     assert check.level == "warning"
-    assert check.message == "No supplier VAT ID or tax number; needed from 250.00 upwards for input VAT deduction"
-    with_id = make_row(**{**FULL, "gross": Decimal("250.00")}, supplier_vat_id="DE123456789")
+    assert check.message == "No supplier VAT ID or tax number; needed above 250.00 for input VAT deduction"
+    with_id = make_row(**{**FULL, "gross": Decimal("250.01")}, supplier_vat_id="DE123456789")
     assert by_name(run_checks(with_id, STANDARD_COLUMNS), "vat_id_missing") == []
-    credit = make_row(**{**FULL, "gross": Decimal("250.00")}, doc_type="credit note")
+    credit = make_row(**{**FULL, "gross": Decimal("250.01")}, doc_type="credit note")
     assert by_name(run_checks(credit, STANDARD_COLUMNS), "vat_id_missing") == []
     without_column = [c for c in STANDARD_COLUMNS if c.key != "supplier_vat_id"]
     assert by_name(run_checks(big, without_column), "vat_id_missing") == []

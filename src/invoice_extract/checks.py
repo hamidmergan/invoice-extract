@@ -9,7 +9,7 @@ from .columns import RESERVED, STANDARD_COLUMNS, Column
 from .normalize import percent_rates
 from .results import Check, Row
 
-VAT_ID_FROM = Decimal("250.00")  # small-amount invoices below this need no VAT ID (§ 33 UStDV)
+SMALL_AMOUNT = Decimal("250.00")  # invoices up to this amount need no VAT ID (§ 33 UStDV)
 RATE_TOLERANCE = Decimal("0.02")
 
 
@@ -71,10 +71,10 @@ def run_checks(row: Row, columns: List[Column]) -> List[Check]:
     if isinstance(invoice_date, datetime.date) and isinstance(due_date, datetime.date) and due_date < invoice_date:
         checks.append(Check("due_before_invoice", "warning", f"Due date {due_date} is before invoice date {invoice_date}"))
 
-    if ("supplier_vat_id" in present and isinstance(gross, Decimal) and gross >= VAT_ID_FROM
+    if ("supplier_vat_id" in present and isinstance(gross, Decimal) and gross > SMALL_AMOUNT
             and not _value(row, "supplier_vat_id", keys) and _value(row, "doc_type", keys) != "credit note"):
-        checks.append(Check("vat_id_missing", "warning", "No supplier VAT ID or tax number; needed from "
-                                                         f"{VAT_ID_FROM} upwards for input VAT deduction"))
+        checks.append(Check("vat_id_missing", "warning", "No supplier VAT ID or tax number; needed above "
+                                                         f"{SMALL_AMOUNT} for input VAT deduction"))
 
     for col in columns:
         if col.required and col.key not in RESERVED and _value(row, col.key, {}) in (None, ""):

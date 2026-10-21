@@ -67,7 +67,7 @@ All standard columns are read from an e-invoice's XML; e-invoices never need a m
 Per row (`run_checks`), in addition to the existing totals, IBAN, due-before-invoice and required checks:
 
 - `vat_rate`: when `vat_rate` holds exactly one rate and net and vat are present: warning if `net × rate / 100` differs from `vat` by more than 0.02. Mixed rates are not checked.
-- `vat_id_missing`: warning when gross is 250.00 or more and `supplier_vat_id` is empty: "No supplier VAT ID; needed on invoices from 250.00 upwards for input VAT deduction". Not raised for credit notes.
+- `vat_id_missing`: warning when gross is above 250.00 (small-amount invoices go up to and including 250.00, § 33 UStDV) and `supplier_vat_id` is empty: "No supplier VAT ID or tax number; needed above 250.00 for input VAT deduction". Not raised for credit notes, nor when the columns have no `supplier_vat_id`.
 
 Across rows (`duplicate_checks(rows)`): rows with the same supplier (casefolded, whitespace collapsed) and the same invoice number (casefolded, stripped) get a warning `duplicate`: "Same invoice number as <other file name>". Rows with no invoice number are skipped. The function removes earlier `duplicate` checks before adding new ones, so it can run after every change. `extract_many` runs it; the web UI runs it after each finished file and after each edit.
 
@@ -91,7 +91,7 @@ API (`web/app.py`): `GET /`, `POST/DELETE /api/files`, `GET /api/state` (columns
 ## CLI and Python API
 
 - `invoice-extract FILES -o invoices.xlsx [--template FILE] [--column LABEL]`: standard columns by default; duplicates are checked across the files.
-- `invoice-extract serve [--template FILE]`.
+- `invoice-extract serve [--template FILE]`. Own columns, from a template or `--column`, are always framed by File and Status.
 - `invoice-extract einvoice ...` stays as it is.
 - `extract(path, columns=None)` and `extract_many(paths, columns=None)` use the standard columns when `columns` is None. `add_columns` stays. `duplicate_checks` is exported.
 

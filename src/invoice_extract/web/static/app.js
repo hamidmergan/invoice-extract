@@ -169,8 +169,17 @@ function tableCell(file, col) {
   if (editable) {
     td.addEventListener("click", (event) => {
       event.stopPropagation();
-      select(file.id);
+      // select the row without rebuilding the table: this cell must stay in the page to hold the editor
+      if (file.id !== ui.selected) {
+        ui.selected = file.id;
+        ui.focusKey = null;
+        for (const tr of document.querySelectorAll("#table tr.selected")) tr.classList.remove("selected");
+        td.parentElement.classList.add("selected");
+      }
       editCell(td, file, col, cell);
+      renderValues();
+      renderChecks();
+      renderViewer();
     });
   }
   return td;
@@ -267,6 +276,9 @@ async function renderViewer() {
   if (!file) {
     ui.shown = null;
     ui.document = null;
+    ui.showDocument = false;
+    ui.page = 1;
+    ui.pages = 0;
     showPage();
     return;
   }

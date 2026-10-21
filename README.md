@@ -52,7 +52,7 @@ Open http://127.0.0.1:8000 and drop your invoices onto the page.
 
 - **The table** has one row per invoice: Type, Supplier, Supplier VAT ID, Invoice No., Invoice Date, Due Date, Description, Net, VAT Rate, VAT, Gross, Currency, IBAN and Status. Click a cell to correct it; edited cells are marked and the checks run again.
 - **The page** below shows the selected invoice with a box around every value the model read. Click a value on the right to jump to it. An XRechnung has no page, so it is shown as an invoice sheet instead; a ZUGFeRD PDF shows its page and, behind "Show e-invoice data", the same sheet. "Print" prints the sheet alone, so your browser can save it as a PDF.
-- **Checks** lists what to look at: a total that does not add up, a VAT amount that does not match the rate, an invalid IBAN, a missing invoice number, a supplier VAT ID missing on an invoice from 250.00 upwards, or the same invoice number as another file.
+- **Checks** lists what to look at: a total that does not add up, a VAT amount that does not match the rate, an invalid IBAN, a missing invoice number, a supplier VAT ID missing on an invoice above 250.00, or the same invoice number as another file.
 - **Export** writes the table as Excel, CSV or JSON.
 
 Want other columns? Start the page with a template (see [Templates](#templates)):
@@ -170,7 +170,7 @@ columns:
     table_columns: [Description, Quantity, Unit Price, Amount]
 ```
 
-The standard columns and their roles are `doc_type`, `supplier`, `supplier_vat_id`, `invoice_no`, `invoice_date`, `due_date`, `description`, `net`, `vat_rate`, `vat`, `gross`, `currency` and `iban`. The standard columns of an e-invoice, including the line items table, come straight from the XML.
+Own columns are always framed by File and Status. The standard columns and their roles are `doc_type`, `supplier`, `supplier_vat_id`, `invoice_no`, `invoice_date`, `due_date`, `description`, `net`, `vat_rate`, `vat`, `gross`, `currency` and `iban`. The standard columns of an e-invoice, including the line items table, come straight from the XML.
 
 ### Export
 
@@ -203,7 +203,7 @@ If a limit is exceeded, the file is rejected with a message naming the limit and
 Every invoice gets a status. The checks do not use the model.
 
 - **ok**: all checks passed.
-- **warning**: something needs a look. The VAT amount does not match the VAT rate, the due date is before the invoice date, a required value is missing, a value does not match the text printed on the page, the supplier VAT ID is missing on an invoice from 250.00 upwards (small-amount invoices below that need none), or another file has the same supplier and invoice number.
+- **warning**: something needs a look. The VAT amount does not match the VAT rate, the due date is before the invoice date, a required value is missing, a value does not match the text printed on the page, the supplier VAT ID is missing on an invoice above 250.00 (small-amount invoices up to 250.00 need none), or another file has the same supplier and invoice number.
 - **error**: net + VAT does not equal gross, the IBAN checksum is wrong, or the file could not be read.
 
 One file is one invoice. A PDF with several invoices in it becomes one row.

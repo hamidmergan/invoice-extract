@@ -130,6 +130,29 @@ def test_extract_many_marks_duplicates(tmp_path, server):
     assert server.requests == []
 
 
+def test_template_roles_are_read_from_xml_without_model(tmp_path, server):
+    from invoice_extract import Template
+    xml = write_samples(tmp_path)[2]
+    cols = Template.loads("columns:\n  - label: Lieferant\n    role: supplier\n  - label: Brutto\n    type: amount\n"
+                          "    role: gross\n  - label: Satz\n    type: percent\n    role: vat_rate\n").columns
+    row = extract_many([xml], cols)[0]
+    assert row.error is None, row.error
+    assert row.cells["lieferant"].value == "ACME GmbH" and row.cells["lieferant"].source == "xml"
+    assert row.cells["brutto"].value == Decimal("119.00") and row.cells["satz"].value == "19"
+    assert server.requests == []
+
+
+def test_add_columns_keeps_duplicate_warnings(tmp_path, server):
+    xml = write_samples(tmp_path)[2]
+    twin = tmp_path / "again.xml"
+    twin.write_bytes(xml.read_bytes())
+    rows = extract_many([xml, twin])
+    server.reply = lambda body: json.dumps({"order_no": {"value": "PO-1", "source_text": "PO-1", "page": 1}})
+    rows = [add_columns(row, [column("Order No.")], **llm(server)) for row in rows]
+    assert [r.status for r in rows] == ["warning", "warning"]
+    assert [c.name for c in rows[0].checks if c.name == "duplicate"] == ["duplicate"]
+
+
 def test_extract_many_limit(tmp_path, server):
     paths = write_samples(tmp_path)[:3]
     with pytest.raises(LimitError):

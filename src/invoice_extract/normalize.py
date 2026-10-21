@@ -122,19 +122,24 @@ def _typed(kind: str, value: Any, raw: Optional[str]) -> Tuple[Any, List[Check]]
     return parsed, _compare(kind, parsed, candidates, raw)
 
 
-_PERCENT = re.compile(r"\d+(?:[.,]\d+)?")
+_PERCENT = re.compile(r"(\d+(?:[.,]\d+)?)(\s*%)?")
 CREDIT_WORDS = ("credit", "gutschrift", "storno", "cancel")
 
 
 def percent_rates(value: Any) -> List[str]:
     """Every rate in `value` as plain percent text: "19 % / 7 %" -> ["19", "7"], 0.19 -> ["19"]."""
-    tokens = [str(value)] if isinstance(value, (int, float, Decimal)) else _PERCENT.findall(str(value))
+    if isinstance(value, bool):
+        return []
+    if isinstance(value, (int, float, Decimal)):
+        tokens = [(str(value), "")]
+    else:
+        tokens = _PERCENT.findall(str(value))
     rates: List[str] = []
-    for token in tokens:
+    for token, sign in tokens:
         text = token.replace(",", ".")
         number = Decimal(text)
-        if "." in text and 0 < number <= 1:
-            number *= 100  # written as a fraction, e.g. 0.19
+        if "." in text and 0 < number <= 1 and not sign:
+            number *= 100  # written as a fraction, e.g. 0.19; "0,5 %" is a printed rate
         rate = format(number.normalize(), "f")
         if rate not in rates:
             rates.append(rate)
@@ -169,8 +174,12 @@ def normalize(type: str, value: Any, raw: Optional[str]) -> Tuple[Any, List[Chec
 def display_variants(type: str, value: Any) -> List[str]:
     """Ways a value may be printed, used to find it on the page."""
     if type == "percent" and isinstance(value, str):
-        rates = [r.strip() for r in value.split(",") if r.strip()]
-        return [f"{r}{sep}%" for r in rates for sep in (" ", "")] + rates
+        out = []
+        for rate in (r.strip() for r in value.split(",") if r.strip()):
+            out += [f"{rate} %", f"{rate}%"]
+            # as printed with decimals; a bare number is never used, it would match any number on the page
+            out += [f"{rate},00 %", f"{rate}.00 %"] if "." not in rate else [f"{rate.replace('.', ',')} %"]
+        return out
     if type == "date" and isinstance(value, datetime.date):
         return [value.strftime(f) for f in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y")]
     if type == "amount" and isinstance(value, Decimal):

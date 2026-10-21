@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..checks import duplicate_checks, run_checks
-from ..columns import RESERVED, STANDARD_COLUMNS, Column
+from ..columns import RESERVED, STANDARD_COLUMNS, Column, export_columns
 from ..config import Settings
 from ..core import _extract, _lazy_client
 from ..detect import embedded_xml
@@ -90,13 +90,15 @@ def create_app(settings: Settings, workdir: Optional[Path] = None, allowed_hosts
                columns: Optional[Sequence[Column]] = None) -> FastAPI:
     """The review page and its JSON API, with one in-memory workspace.
 
-    `columns` are the table's columns (default: the standard columns). `allowed_hosts` limits the Host header
+    `columns` are the table's columns, framed by File and Status (default: the standard columns).
+    `allowed_hosts` limits the Host header
     (against DNS rebinding); requests from another origin are always refused.
     """
     tmp = None if workdir is not None else tempfile.TemporaryDirectory(prefix="invoice-extract-")
     uploads = Path(workdir) if workdir is not None else Path(tmp.name)
     uploads.mkdir(parents=True, exist_ok=True)
-    ws = Workspace(columns=list(columns) if columns is not None else list(STANDARD_COLUMNS))
+    own = [c for c in columns if c.key not in RESERVED] if columns is not None else None
+    ws = Workspace(columns=export_columns(own) if own is not None else list(STANDARD_COLUMNS))
     lock = threading.Lock()
     pool = ThreadPoolExecutor(settings.concurrency)
     get_client = _lazy_client(settings, None)

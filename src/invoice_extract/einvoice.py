@@ -248,7 +248,7 @@ _UBL_PARTY: Dict[str, List[str]] = {
     "postcode": ["cac:PostalAddress/cbc:PostalZone"],
     "city": ["cac:PostalAddress/cbc:CityName"],
     "country": ["cac:PostalAddress/cac:Country/cbc:IdentificationCode"],
-    "email": ["cac:Contact/cbc:ElectronicMail", "cbc:EndpointID"],
+    "email": ["cac:Contact/cbc:ElectronicMail", "cbc:EndpointID[@schemeID='EM']"],
     "phone": ["cac:Contact/cbc:Telephone"],
     "contact": ["cac:Contact/cbc:Name"],
 }

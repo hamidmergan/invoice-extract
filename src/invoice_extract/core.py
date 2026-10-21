@@ -75,9 +75,10 @@ def _xml_cells(path: PathLike, kind: str, columns: List[Column], settings: Setti
             lines = [{n: line.get(n, "") for n in names} for line in parse_line_items(data)]
             cells[col.key] = Cell(value=lines or None, source="xml", kind="table", label=col.label, columns=names)
     for col in columns:
-        if col.key not in XML_KEYS:
+        key = col.role or col.key  # a template column with a role reads the standard field of that meaning
+        if key not in XML_KEYS:
             continue
-        raw = parsed.get(col.key, "")
+        raw = parsed.get(key, "")
         if not raw:
             cells[col.key] = Cell(source="xml")
             continue
@@ -91,7 +92,7 @@ def _xml_cells(path: PathLike, kind: str, columns: List[Column], settings: Setti
                     break
         cells[col.key] = cell
 
-    rest = [c for c in columns if c.key not in XML_KEYS and c.key not in cells]
+    rest = [c for c in columns if (c.role or c.key) not in XML_KEYS and c.key not in cells]
     if rest:
         text = xml_text(data)
         if kind == "zugferd":
@@ -216,6 +217,6 @@ def add_columns(row: Row, columns: List[Column], *, base_url: Optional[str] = No
         row.kind = kind
         row.cells.update(_fill(row.path, kind, missing, settings, _lazy_client(settings, client)))
     fresh = run_checks(row, columns)
-    kept = [c for c in row.checks if c.name == "required" and c not in fresh]
+    kept = [c for c in row.checks if (c.name == "required" and c not in fresh) or c.name == "duplicate"]
     row.checks = kept + fresh
     return row

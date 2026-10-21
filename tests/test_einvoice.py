@@ -158,3 +158,11 @@ def test_parse_document_missing_parts_are_empty():
     assert set(doc) == set(EXPECTED_DOCUMENT)
     with pytest.raises(UnsupportedFileError):
         parse_document(b"<Order/>")
+
+
+def test_parse_document_endpoint_is_email_only_with_scheme_em():
+    party = b'<cac:Party>'
+    with_email = ubl_xml().replace(party, party + b'<cbc:EndpointID schemeID="EM">a@b.de</cbc:EndpointID>', 1)
+    assert parse_document(with_email)["seller"]["email"] == "a@b.de"
+    leitweg = ubl_xml().replace(party, party + b'<cbc:EndpointID schemeID="0204">04011000-1-03</cbc:EndpointID>', 1)
+    assert parse_document(leitweg)["seller"]["email"] == ""

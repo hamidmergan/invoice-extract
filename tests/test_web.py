@@ -96,7 +96,7 @@ def test_own_columns_with_a_table_export_csv_as_zip(tmp_path, server):
     with client_for(resolve(), columns) as client:
         upload(client, xml)
         state = wait_done(client)
-        assert [c["key"] for c in state["columns"]] == ["gross", "line_items"]
+        assert [c["key"] for c in state["columns"]] == ["file", "gross", "line_items", "status"]
         assert state["files"][0]["row"]["cells"]["line_items"]["value"][0]["Description"] == "Paper"
         file_id = state["files"][0]["id"]
         assert client.patch(f"/api/files/{file_id}/cells/line_items", json={"value": "x"}).status_code == 400

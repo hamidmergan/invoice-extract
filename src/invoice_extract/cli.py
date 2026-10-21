@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import __version__
-from .columns import STANDARD_COLUMNS, Template, column
+from .columns import RESERVED, STANDARD_COLUMNS, Template, column, export_columns
 from .config import resolve
 from .core import extract_many
 from .errors import ConfigError, InvoiceError
@@ -90,11 +90,12 @@ def _output(value: Optional[str]) -> Path:
 
 
 def _columns(args: argparse.Namespace) -> list:
-    """The columns to fill: a template's, else the standard columns, plus any --column."""
+    """The columns to fill: a template's, else the standard columns, plus any --column; framed by File and Status."""
     cols = list(Template.load(args.template).columns) if args.template else list(STANDARD_COLUMNS)
+    cols = [c for c in cols if c.key not in RESERVED]
     for label in args.column:
         cols.append(column(label, existing=[c.key for c in cols]))
-    return cols
+    return export_columns(cols)
 
 
 def _run_extract(argv: List[str]) -> int:

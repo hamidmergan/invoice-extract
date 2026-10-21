@@ -89,7 +89,7 @@ def test_text_and_none():
 @pytest.mark.parametrize("value, expected", [
     ("19 %", "19"), ("0.19", "19"), ("19,00", "19"), ("19 % / 7 %", "19, 7"), (19, "19"), ("0", "0"),
     ("5.5", "5.5"), ("MwSt 19% zzgl. 7%", "19, 7"), ("19 %, 19 %", "19"), ("", None), (None, None), (0.07, "7"),
-    ("20", "20"),
+    ("20", "20"), ("0,5 %", "0.5"), ("0.5%", "0.5"),
 ])
 def test_percent_forms(value, expected):
     assert normalize("percent", value, "") == (expected, [])
@@ -98,7 +98,8 @@ def test_percent_forms(value, expected):
 def test_percent_unparsed_kept():
     value, checks = normalize("percent", "none", "")
     assert value == "none" and names(checks) == ["unparsed"]
-    assert display_variants("percent", "19, 7") == ["19 %", "19%", "7 %", "7%", "19", "7"]
+    assert names(normalize("percent", True, "")[1]) == ["unparsed"]
+    assert display_variants("percent", "19, 7.5") == ["19 %", "19%", "19,00 %", "19.00 %", "7.5 %", "7.5%", "7,5 %"]
 
 
 @pytest.mark.parametrize("value, expected", [

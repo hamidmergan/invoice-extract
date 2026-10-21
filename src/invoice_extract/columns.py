@@ -42,8 +42,8 @@ def _standard(key: str, label: str, hint: str, type: str = "text", required: boo
 # The columns a bookkeeper expects, in table order. Keys are stable API; each key is also its role.
 STANDARD_COLUMNS: List[Column] = [
     Column("file", "File", type="file"),
-    _standard("doc_type", "Type", 'Write "credit note" if the document is a credit note (Gutschrift) or a '
-                                  'cancellation, otherwise "invoice".', "doctype"),
+    _standard("doc_type", "Type", 'The document type as printed in its heading, e.g. "Rechnung", "Invoice", '
+                                  '"Gutschrift" or "Credit Note".', "doctype"),
     _standard("supplier", "Supplier", "Name of the company that issued the invoice.", required=True),
     _standard("supplier_vat_id", "Supplier VAT ID", "VAT identification number (USt-IdNr., e.g. DE123456789) or "
                                                     "tax number of the supplier, as printed."),
@@ -53,8 +53,8 @@ STANDARD_COLUMNS: List[Column] = [
     _standard("description", "Description", "What the invoice is for, as printed: the subject line or the first "
                                             "line item, e.g. 'Mobile plan October 2026'."),
     _standard("net", "Net", "Total amount without VAT.", "amount"),
-    _standard("vat_rate", "VAT Rate", "VAT rate in percent, e.g. 19; several rates as '19, 7'; 0 when no VAT "
-                                      "is charged.", "percent"),
+    _standard("vat_rate", "VAT Rate", "The VAT rate in percent as printed, e.g. 19; several rates as '19, 7'.",
+              "percent"),
     _standard("vat", "VAT", "Total VAT amount.", "amount"),
     _standard("gross", "Gross", "Total amount including VAT, the amount to pay.", "amount", required=True),
     _standard("currency", "Currency", "3-letter ISO currency code, e.g. EUR."),
