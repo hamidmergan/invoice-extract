@@ -1,20 +1,22 @@
 "use strict";
 
-// Review UI for invoice-extract. Plain DOM, no framework. All data goes in via textContent.
+// Review UI for invoice-extract (layout C): fields for all invoices on the left, the current invoice on the right,
+// the export preview below. Plain DOM, no framework. All data goes in via textContent.
 
 const SVG_NS = "http://www.w3.org/2000/svg";
-const RESERVED = new Set(["file", "status"]);
-const CLICKABLE_KINDS = new Set(["pdf", "zugferd"]);
+const PALETTE = ["#2f6fed", "#1f9d55", "#d08a00", "#8b5cf6", "#d64545", "#0e9aa7", "#c2410c", "#be185d",
+  "#4d7c0f", "#6366f1", "#0369a1", "#a16207"];
+const GROUPS = [["value", "Values"], ["text", "Text blocks"], ["table", "Tables"]];
 const ICONS = { ok: "✓", warning: "!", error: "×" };
 
 const ui = {
-  data: { columns: [], files: [], summary: { files: 0, columns: 0, to_check: 0 } },
+  data: { mode: "discover", fields: [], files: [], summary: { files: 0, fields: 0, to_check: 0 } },
   selected: null,
   page: 1,
   pages: 0,
   shownFile: null,
-  segments: null,
   focusKey: null,
+  tab: "invoices",
   editing: false,
   timer: null,
 };
@@ -26,6 +28,7 @@ function el(tag, props, ...kids) {
   for (const [key, value] of Object.entries(props || {})) {
     if (value == null || value === false) continue;
     if (key === "class") node.className = value;
+    else if (key === "style") node.style.cssText = value;
     else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
     else node.setAttribute(key, value === true ? "" : value);
   }
@@ -69,34 +72,33 @@ function guard(fn) {
 
 // ---- state -------------------------------------------------------------
 
-function busy() {
-  return ui.data.files.some((f) => f.state !== "done");
-}
-
 async function refresh() {
   ui.data = await api("GET", "/api/state");
   if (!ui.data.files.some((f) => f.id === ui.selected)) {
     ui.selected = ui.data.files.length ? ui.data.files[0].id : null;
   }
+  const tables = selectedFields().filter((f) => f.kind === "table").map((f) => f.key);
+  if (ui.tab !== "invoices" && !tables.includes(ui.tab)) ui.tab = "invoices";
   render();
   clearTimeout(ui.timer);
-  ui.timer = busy() ? setTimeout(guard(refresh), 1000) : null;
+  const busy = ui.data.files.some((f) => f.state !== "done");
+  ui.timer = busy ? setTimeout(guard(refresh), 1000) : null;
 }
 
-function selectedFile() {
-  return ui.data.files.find((f) => f.id === ui.selected) || null;
-}
+const currentFile = () => ui.data.files.find((f) => f.id === ui.selected) || null;
+const selectedFields = () => ui.data.fields.filter((f) => f.selected);
+const fieldOf = (key) => ui.data.fields.find((f) => f.key === key);
+const cellOf = (file, key) => (file && file.row && file.row.cells ? file.row.cells[key] : undefined);
+const display = (value) => (value == null ? "" : String(value));
 
-function cellOf(file, key) {
-  return file && file.row && file.row.cells ? file.row.cells[key] : undefined;
-}
-
-function display(value) {
-  return value == null ? "" : String(value);
+function colorOf(key) {
+  const index = ui.data.fields.findIndex((f) => f.key === key);
+  return PALETTE[(index < 0 ? 0 : index) % PALETTE.length];
 }
 
 function statusText(file) {
-  if (file.state !== "done") return file.row ? "filling new columns…" : "reading…";
+  if (file.state === "merging") return "matching fields…";
+  if (file.state !== "done") return "reading…";
   const row = file.row;
   if (row.error) return row.error;
   const issues = row.checks.filter((c) => c.level !== "ok");
@@ -107,120 +109,142 @@ function statusText(file) {
 // ---- rendering ---------------------------------------------------------
 
 function render() {
-  renderStrip();
-  renderColumns();
-  renderValues();
+  renderTopbar();
+  renderFields();
   renderChecks();
   renderSummary();
+  renderTabs();
   if (!ui.editing) renderTable();
   renderViewer();
 }
 
-function dotClass(file) {
-  return file.state === "done" ? file.status : file.state;
+function renderTopbar() {
+  const template = ui.data.mode === "template";
+  $("mode-badge").hidden = !template;
+  $("all-fields-button").hidden = !template;
 }
 
-function renderStrip() {
-  const strip = $("strip");
-  strip.replaceChildren(...ui.data.files.map((f) => el("button", {
-    class: "chip" + (f.id === ui.selected ? " selected" : ""),
-    title: f.name,
-    onclick: () => select(f.id),
-  }, el("span", { class: `dot ${dotClass(f)}` }), el("span", { class: "name" }, f.name))));
-}
-
-function renderColumns() {
-  $("columns-title").textContent = `Columns (${ui.data.columns.length})`;
-  $("columns").replaceChildren(...ui.data.columns.map((c) => el("span", { class: "chip", title: c.hint || c.label },
-    c.label,
-    el("button", { class: "remove", "aria-label": `Remove column ${c.label}`, onclick: guard(() => removeColumn(c)) }, "×"))));
-}
-
-function renderValues() {
-  const list = $("values");
-  const file = selectedFile();
-  if (!file || !file.row || file.row.error) {
-    list.replaceChildren(el("dd", { class: "muted" }, file ? statusText(file) : "No file selected"));
-    return;
+function renderFields() {
+  const total = ui.data.files.filter((f) => f.state === "done" && f.row && !f.row.error).length;
+  $("fields-title").textContent = `Fields (${ui.data.summary.fields} of ${ui.data.fields.length})`;
+  $("fields-help").hidden = ui.data.fields.length > 0;
+  const groups = [];
+  for (const [kind, title] of GROUPS) {
+    const fields = ui.data.fields.filter((f) => f.kind === kind);
+    if (!fields.length) continue;
+    groups.push(el("div", { class: "group" },
+      el("div", { class: "group-head" },
+        el("strong", null, title),
+        el("span", { class: "spacer" }),
+        el("button", { class: "link", onclick: guard(() => selectGroup(kind, true)) }, "All"),
+        el("button", { class: "link", onclick: guard(() => selectGroup(kind, false)) }, "None")),
+      fields.map((f) => fieldItem(f, total))));
   }
-  const items = [];
-  for (const col of ui.data.columns) {
-    if (RESERVED.has(col.key)) continue;
-    const cell = cellOf(file, col.key);
-    const hasBox = cell && cell.box;
-    items.push(el("dt", null, col.label));
-    items.push(el("dd", { class: hasBox ? "clickable" : null, onclick: hasBox ? () => focusCell(col.key, cell) : null },
-      el("span", { class: "value" }, cell && cell.value != null ? display(cell.value) : "–"),
-      cell && cell.source ? el("span", { class: "badge" }, cell.source) : null,
-      cell && cell.edited ? el("span", { class: "badge edited" }, "edited") : null));
-  }
-  list.replaceChildren(...items);
+  $("field-groups").replaceChildren(...groups);
+}
+
+function fieldItem(field, total) {
+  const box = el("input", { type: "checkbox", "aria-label": `Export ${field.label}` });
+  box.checked = field.selected;
+  box.addEventListener("change", guard(() => toggleField(field.key, box.checked)));
+  return el("div", { class: "field" + (field.selected ? "" : " off") + (field.key === ui.focusKey ? " focus" : "") },
+    box,
+    el("span", { class: "swatch", style: `background:${colorOf(field.key)}` }),
+    el("button", { class: "name", title: field.hint || field.label, onclick: () => focusField(field.key) }, field.label),
+    el("span", { class: "count" }, `${field.count}/${total}`));
 }
 
 function renderChecks() {
-  const list = $("checks");
-  const file = selectedFile();
+  const file = currentFile();
   const checks = [];
   if (file && file.row) {
     if (file.row.error) checks.push({ level: "error", message: file.row.error });
     else {
       checks.push(...file.row.checks);
       for (const [key, cell] of Object.entries(file.row.cells)) {
-        const label = (ui.data.columns.find((c) => c.key === key) || { label: key }).label;
+        const label = cell.label || (fieldOf(key) || { label: key }).label;
         for (const c of cell.checks) checks.push({ level: c.level, message: `${label}: ${c.message}` });
       }
     }
   }
   if (!checks.length) {
-    list.replaceChildren(el("li", { class: "muted" }, file ? "No checks yet" : "No file selected"));
+    $("checks").replaceChildren(el("li", { class: "muted" }, file ? statusText(file) : "No file selected"));
     return;
   }
-  list.replaceChildren(...checks.map((c) => el("li", null,
+  $("checks").replaceChildren(...checks.map((c) => el("li", null,
     el("span", { class: `icon ${c.level}` }, ICONS[c.level] || "•"), el("span", null, c.message))));
 }
 
 function renderSummary() {
   const s = ui.data.summary;
   const reading = ui.data.files.filter((f) => f.state !== "done").length;
-  let text = `${s.files} files · ${s.columns} columns · ${s.to_check} to check`;
+  let text = `${s.files} files · ${s.fields} fields · ${s.to_check} to check`;
   if (reading) text += ` · ${reading} reading`;
   $("summary").textContent = text;
 }
 
+function renderTabs() {
+  const tables = selectedFields().filter((f) => f.kind === "table");
+  const tabs = [["invoices", "Invoices"], ...tables.map((f) => [f.key, f.label])];
+  $("tabs").replaceChildren(...(tabs.length > 1 ? tabs : []).map(([key, label]) => el("button", {
+    class: "tab" + (ui.tab === key ? " active" : ""), role: "tab",
+    onclick: () => { ui.tab = key; renderTable(); renderTabs(); },
+  }, label)));
+}
+
 function renderTable() {
-  const cols = ui.data.columns;
-  const head = el("thead", null, el("tr", null, cols.map((c) => el("th", { title: c.hint || null }, c.label))));
+  if (ui.tab !== "invoices") return renderLineTable(fieldOf(ui.tab));
+  const cols = selectedFields().filter((f) => f.kind !== "table");
+  const head = el("thead", null, el("tr", null, el("th", null, "File"),
+    cols.map((c) => el("th", { title: c.hint || null }, c.label)), el("th", null, "Status")));
   const body = el("tbody", null, ui.data.files.map((f) => el("tr", {
     class: f.id === ui.selected ? "selected" : null,
     onclick: () => select(f.id),
-  }, cols.map((c) => tableCell(f, c)))));
+  }, el("td", null, el("span", { class: `dot ${f.state === "done" ? f.status : f.state}` }), f.name),
+  cols.map((c) => tableCell(f, c)),
+  el("td", { class: f.state === "done" && f.status !== "ok" ? `status-${f.status}` : null }, statusText(f)))));
   $("table").replaceChildren(head, body);
 }
 
-function tableCell(file, col) {
-  if (col.key === "file") return el("td", null, file.name);
-  if (col.key === "status") {
-    return el("td", { class: file.state === "done" && file.status !== "ok" ? `status-${file.status}` : null },
-      statusText(file));
+function renderLineTable(field) {
+  if (!field) return;
+  const numbered = ui.data.files.some((f) => cellOf(f, "invoice_no") && cellOf(f, "invoice_no").value);
+  const head = el("thead", null, el("tr", null, el("th", null, "File"), numbered ? el("th", null, "Invoice No.") : null,
+    field.table_columns.map((name) => el("th", null, name))));
+  const rows = [];
+  for (const f of ui.data.files) {
+    const cell = cellOf(f, field.key);
+    if (!cell || !Array.isArray(cell.value)) continue;
+    for (const line of cell.value) {
+      rows.push(el("tr", { class: f.id === ui.selected ? "selected" : null, onclick: () => select(f.id) },
+        el("td", null, f.name),
+        numbered ? el("td", null, display((cellOf(f, "invoice_no") || {}).value)) : null,
+        field.table_columns.map((name) => el("td", null, display(line[name])))));
+    }
   }
-  const cell = cellOf(file, col.key);
-  const editable = file.state === "done" && !file.row.error;
+  $("table").replaceChildren(head, el("tbody", null, rows));
+}
+
+function tableCell(file, field) {
+  const cell = cellOf(file, field.key);
+  const editable = file.state === "done" && file.row && !file.row.error;
   const classes = [editable ? "editable" : "", cell && cell.edited ? "edited" : ""].join(" ").trim();
-  const td = el("td", { class: classes || null }, cell ? display(cell.value) : "");
+  const text = cell ? display(cell.value) : "";
+  const td = el("td", { class: classes || null, title: text.length > 40 ? text : null }, text);
   if (editable) {
     td.addEventListener("click", (event) => {
       event.stopPropagation();
       select(file.id);
-      editCell(td, file, col, cell);
+      editCell(td, file, field, cell);
     });
   }
   return td;
 }
 
-function editCell(td, file, col, cell) {
+function editCell(td, file, field, cell) {
   if (ui.editing) return;
   ui.editing = true;
-  const input = el("input", { type: "text", "aria-label": col.label });
+  const input = el("input", { type: "text", "aria-label": field.label });
   input.value = cell ? display(cell.value) : "";
   let done = false;
   const finish = () => { done = true; ui.editing = false; renderTable(); };
@@ -229,7 +253,7 @@ function editCell(td, file, col, cell) {
     if (event.key !== "Enter") return;
     done = true;
     try {
-      await api("PATCH", `/api/files/${encodeURIComponent(file.id)}/cells/${encodeURIComponent(col.key)}`,
+      await api("PATCH", `/api/files/${encodeURIComponent(file.id)}/cells/${encodeURIComponent(field.key)}`,
         { value: input.value });
     } finally {
       ui.editing = false;
@@ -248,17 +272,29 @@ function editCell(td, file, col, cell) {
 function select(id) {
   if (id === ui.selected) return;
   ui.selected = id;
-  ui.focusKey = null;
   render();
 }
 
+function flipFile(delta) {
+  const files = ui.data.files;
+  const index = files.findIndex((f) => f.id === ui.selected);
+  if (index < 0) return;
+  const next = files[index + delta];
+  if (next) select(next.id);
+}
+
 async function renderViewer() {
-  const file = selectedFile();
-  $("viewer-name").textContent = file ? file.name : "No file selected";
+  const file = currentFile();
+  const files = ui.data.files;
+  const index = files.findIndex((f) => f.id === ui.selected);
+  $("viewer-name").textContent = file ? `${file.name} (${index + 1}/${files.length})` : "No file selected";
+  $("prev-file").disabled = index <= 0;
+  $("next-file").disabled = index < 0 || index >= files.length - 1;
   if (!file) {
     ui.shownFile = null;
+    ui.pages = 0;
     $("page-wrap").hidden = true;
-    $("viewer-help").hidden = false;
+    $("viewer-help").textContent = "Add invoices to start: drop them anywhere or use “Add files”.";
     updatePager();
     return;
   }
@@ -266,7 +302,6 @@ async function renderViewer() {
     ui.shownFile = file.id;
     ui.page = 1;
     ui.pages = 0;
-    closeSegments();
     const res = await api("GET", `/api/files/${encodeURIComponent(file.id)}/pages`).catch(() => ({ count: 0 }));
     if (ui.shownFile !== file.id) return;
     ui.pages = res.count;
@@ -276,23 +311,17 @@ async function renderViewer() {
 }
 
 function showPage() {
-  const file = selectedFile();
-  const wrap = $("page-wrap");
-  const help = $("viewer-help");
+  const file = currentFile();
   updatePager();
   if (!file || !ui.pages) {
-    wrap.hidden = true;
-    help.hidden = false;
-    help.textContent = file && file.kind === "xml"
+    $("page-wrap").hidden = true;
+    $("viewer-help").textContent = file && file.kind === "xml"
       ? "E-invoice (XML): no page image. The values come straight from the file."
       : "No preview for this file.";
     return;
   }
-  help.hidden = false;
-  help.textContent = CLICKABLE_KINDS.has(file.kind)
-    ? "Click a spot on the page to pick a field as a new column."
-    : "Boxes show where the model found each value.";
-  wrap.hidden = false;
+  $("viewer-help").textContent = "Coloured boxes show what the model found. Faded boxes are not exported.";
+  $("page-wrap").hidden = false;
   $("page-image").src = `/api/files/${encodeURIComponent(file.id)}/pages/${ui.page}.png`;
 }
 
@@ -306,134 +335,89 @@ function turnPage(delta) {
   const page = ui.page + delta;
   if (page < 1 || page > ui.pages) return;
   ui.page = page;
-  closeSegments();
   showPage();
 }
 
 function drawOverlay() {
   const img = $("page-image");
   const overlay = $("overlay");
-  const file = selectedFile();
-  if (!file || !img.naturalWidth) {
+  const file = currentFile();
+  if (!file || !file.row || !img.naturalWidth || $("page-wrap").hidden) {
     overlay.replaceChildren();
     return;
   }
   const w = img.naturalWidth;
   const h = img.naturalHeight;
   overlay.setAttribute("viewBox", `0 0 ${w} ${h}`);
-  const font = Math.max(10, Math.round(w / 70));
+  const font = Math.max(10, Math.round(w / 75));
   const nodes = [];
-  for (const col of ui.data.columns) {
-    const cell = cellOf(file, col.key);
-    const box = cell && cell.box;
+  let focused = null;
+  for (const [key, cell] of Object.entries(file.row.cells || {})) {
+    const box = cell.box;
     if (!box || box.page !== ui.page) continue;
+    const field = fieldOf(key);
+    const off = field ? !field.selected : true;
+    const color = colorOf(key);
     const x = box.x0 * w;
     const y = box.y0 * h;
-    nodes.push(svg("rect", { class: "box" + (col.key === ui.focusKey ? " focus" : ""), x, y,
-      width: (box.x1 - box.x0) * w, height: (box.y1 - box.y0) * h, rx: 3 }));
+    const rect = svg("rect", { class: "box" + (off ? " off" : "") + (key === ui.focusKey ? " focus" : ""), x, y,
+      width: (box.x1 - box.x0) * w, height: (box.y1 - box.y0) * h, rx: 3, fill: color, stroke: color });
+    nodes.push(rect);
+    if (key === ui.focusKey) focused = rect;
     // the tag sits right of the box, or left of it near the page edge, so it never hides the text
-    const tag = svg("g", { class: "box-tag" });
-    const tagWidth = col.label.length * font * 0.62 + font;
+    const label = (field && field.label) || cell.label || key;
+    const tagWidth = label.length * font * 0.62 + font;
     const right = box.x1 * w + font / 2;
     const tagX = right + tagWidth <= w ? right : Math.max(0, x - tagWidth - font / 2);
     const tagY = Math.max(0, ((box.y0 + box.y1) / 2) * h - font * 0.7);
-    tag.append(svg("rect", { x: tagX, y: tagY, width: tagWidth, height: font * 1.4, rx: 3 }));
+    const tag = svg("g", { class: "tag" + (off ? " off" : "") });
+    tag.append(svg("rect", { x: tagX, y: tagY, width: tagWidth, height: font * 1.4, rx: 3, fill: color }));
     const text = svg("text", { x: tagX + font / 2, y: tagY + font * 1.05, "font-size": font });
-    text.textContent = col.label;
+    text.textContent = label;
     tag.append(text);
     nodes.push(tag);
   }
-  for (const seg of ui.segments || []) {
-    const b = seg.box;
-    const rect = svg("rect", { class: "seg", x: b.x0 * w, y: b.y0 * h, width: (b.x1 - b.x0) * w,
-      height: (b.y1 - b.y0) * h });
-    rect.dataset.index = seg.index;
-    nodes.push(rect);
-  }
   overlay.replaceChildren(...nodes);
+  if (focused) focused.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
-function focusCell(key, cell) {
+function focusField(key) {
   ui.focusKey = key;
-  if (cell.box.page !== ui.page && cell.box.page <= ui.pages) {
+  const cell = cellOf(currentFile(), key);
+  if (!cell || !cell.box) {
+    toast("This field has no box on this invoice.");
+  } else if (cell.box.page !== ui.page && cell.box.page <= ui.pages) {
     ui.page = cell.box.page;
-    closeSegments();
     showPage();
-  } else {
-    drawOverlay();
   }
-}
-
-async function onOverlayClick(event) {
-  const file = selectedFile();
-  if (!file || !CLICKABLE_KINDS.has(file.kind)) return;
-  const index = event.target.dataset && event.target.dataset.index;
-  if (index !== undefined) {
-    openPopover(ui.segments.find((s) => String(s.index) === index));
-    return;
-  }
-  if (ui.segments) {
-    closeSegments();
-    return;
-  }
-  ui.segments = await api("GET", `/api/files/${encodeURIComponent(file.id)}/pages/${ui.page}/segments`);
-  if (!ui.segments.length) toast("This page has no text layer to pick from.");
+  renderFields();
   drawOverlay();
-}
-
-function closeSegments() {
-  ui.segments = null;
-  $("popover").hidden = true;
-  drawOverlay();
-}
-
-function openPopover(seg) {
-  if (!seg) return;
-  const pop = $("popover");
-  pop.dataset.index = seg.index;
-  pop.style.left = `${Math.min(seg.box.x0 * 100, 60)}%`;
-  pop.style.top = `${seg.box.y1 * 100}%`;
-  $("popover-example").textContent = `Example: "${seg.text.trim()}"`;
-  $("popover-title").value = "";
-  pop.hidden = false;
-  $("popover-title").focus();
-}
-
-async function createFromPopover() {
-  const label = $("popover-title").value.trim();
-  if (!label) {
-    toast("Give the column a title first.");
-    return;
-  }
-  const file = selectedFile();
-  const index = Number($("popover").dataset.index);
-  await api("POST", "/api/columns", { label, from: { file_id: file.id, page: ui.page, index } });
-  closeSegments();
-  await refresh();
 }
 
 // ---- actions -----------------------------------------------------------
+
+async function putSelection(keys) {
+  await api("PUT", "/api/selection", { keys });
+  await refresh();
+}
+
+function toggleField(key, on) {
+  const keys = new Set(selectedFields().map((f) => f.key));
+  if (on) keys.add(key);
+  else keys.delete(key);
+  return putSelection(ui.data.fields.filter((f) => keys.has(f.key)).map((f) => f.key));
+}
+
+function selectGroup(kind, on) {
+  const keys = ui.data.fields.filter((f) => (f.kind === kind ? on : f.selected)).map((f) => f.key);
+  return putSelection(keys);
+}
 
 async function uploadFiles(list) {
   if (!list || !list.length) return;
   const form = new FormData();
   for (const file of list) form.append("files", file, file.name);
   await api("POST", "/api/files", form);
-  await refresh();
-}
-
-async function removeColumn(col) {
-  await api("DELETE", `/api/columns/${encodeURIComponent(col.key)}`);
-  await refresh();
-}
-
-async function addColumn(event) {
-  event.preventDefault();
-  const input = $("add-column-label");
-  const label = input.value.trim();
-  if (!label) return;
-  await api("POST", "/api/columns", { label });
-  input.value = "";
   await refresh();
 }
 
@@ -444,12 +428,20 @@ async function loadTemplate(event) {
   const form = new FormData();
   form.append("file", file, file.name);
   await api("POST", "/api/template", form);
+  ui.shownFile = null;
+  await refresh();
+}
+
+async function useAllFields() {
+  await api("DELETE", "/api/template");
+  ui.shownFile = null;
   await refresh();
 }
 
 async function clearAll() {
   if (!ui.data.files.length || !confirm("Remove all files from this session?")) return;
   await api("DELETE", "/api/files");
+  ui.focusKey = null;
   await refresh();
 }
 
@@ -462,7 +454,7 @@ function toggleExport(open) {
 
 function exportAs(format) {
   toggleExport(false);
-  const link = el("a", { href: `/api/export?format=${format}`, download: `invoices.${format}` });
+  const link = el("a", { href: `/api/export?format=${format}` });
   document.body.append(link);
   link.click();
   link.remove();
@@ -495,20 +487,17 @@ function setup() {
   });
   document.addEventListener("click", () => toggleExport(false));
   $("clear-button").addEventListener("click", guard(clearAll));
+  $("all-fields-button").addEventListener("click", guard(useAllFields));
+  $("template-input").addEventListener("change", guard(loadTemplate));
+  $("prev-file").addEventListener("click", () => flipFile(-1));
+  $("next-file").addEventListener("click", () => flipFile(1));
   $("prev-page").addEventListener("click", () => turnPage(-1));
   $("next-page").addEventListener("click", () => turnPage(1));
   $("page-image").addEventListener("load", drawOverlay);
-  $("overlay").addEventListener("click", guard(onOverlayClick));
-  $("popover-cancel").addEventListener("click", () => { $("popover").hidden = true; });
-  $("popover-create").addEventListener("click", guard(createFromPopover));
-  $("popover-title").addEventListener("keydown", (event) => {
-    if (event.key === "Enter") guard(createFromPopover)();
-    if (event.key === "Escape") $("popover").hidden = true;
-  });
-  $("add-column").addEventListener("submit", guard(addColumn));
-  $("template-input").addEventListener("change", guard(loadTemplate));
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && ui.segments && !ui.editing) closeSegments();
+    if (ui.editing || event.target.tagName === "INPUT") return;
+    if (event.key === "ArrowRight") flipFile(1);
+    if (event.key === "ArrowLeft") flipFile(-1);
   });
   guard(refresh)();
 }

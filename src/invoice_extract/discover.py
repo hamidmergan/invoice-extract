@@ -52,6 +52,7 @@ def _keyed(found: List[Cell], cells: Dict[str, Cell], row: Row) -> None:
             label = role_column(role).label
             row.checks.append(Check("role_conflict", "warning",
                                     f"Several values look like {label}; checks that need it were skipped"))
+    fixed = set(cells)  # e-invoice XML fields; the model's copies of them are dropped
     for cell in found:
         if cell.role and counts[cell.role] == 1:
             if cell.role in cells:
@@ -60,6 +61,8 @@ def _keyed(found: List[Cell], cells: Dict[str, Cell], row: Row) -> None:
             cells[cell.role] = cell
         else:
             cell.role = ""
+            if make_key(cell.label, ()) in fixed:
+                continue
             cells[make_key(cell.label, cells)] = cell
 
 
@@ -150,6 +153,8 @@ def _merge_labels(rows: List[Row], settings: Settings, client: ClientGetter, kno
             if cell.role or key in RESERVED:
                 continue
             target = mapping.get(cell.label, cell.label)
+            if make_key(target, ()) == make_key(cell.label, ()):
+                target = cell.label  # the same name in other spelling, e.g. "line_items": keep the readable label
             if target not in new_keys:
                 taken = set(new_keys.values()) | {c.key for c in known}
                 new_keys[target] = keys_by_label.get(target) or make_key(target, taken)
@@ -259,7 +264,9 @@ def with_hints(fields: List[Column], rows: List[Row]) -> List[Column]:
             for row in rows:
                 cell = row.cells.get(col.key)
                 if cell is not None and not row.error and _filled(cell) and len(examples) < 2:
-                    examples.append(_example(cell))
+                    example = _example(cell)
+                    if example not in examples:
+                        examples.append(example)
             if examples:
                 hint = "Example values: " + ", ".join(f'"{e}"' for e in examples) + "."
         hinted.append(replace(col, hint=hint or ""))

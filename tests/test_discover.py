@@ -199,3 +199,25 @@ def test_einvoice_keeps_xml_when_discovery_fails(tmp_path, server):
     row = run(write_samples(tmp_path)[2], llm_settings(server))
     assert row.error is None and row.cells["gross"].value == Decimal("119.00")
     assert [c.name for c in row.checks if c.level != "ok"] == ["discovery_failed"]
+
+
+def test_einvoice_drops_discovered_duplicates_of_xml_fields(tmp_path, server):
+    server.reply = items(
+        {"label": "Line Items", "kind": "table", "columns": ["Item"], "rows": [["Paper"]], "page": 1},
+        {"label": "Customer No.", "kind": "value", "value": "K-1", "page": 1})
+    row = run(write_samples(tmp_path)[2], llm_settings(server))
+    assert sorted(k for k in row.cells if k.startswith("line_items")) == ["line_items"]
+    assert row.cells["line_items"].source == "xml" and "customer_no" in row.cells
+
+
+def test_with_hints_uses_distinct_examples():
+    rows = [make_row("a.pdf", cust=val("Customer No.", "K-1")), make_row("b.pdf", cust=val("Customer No.", "K-1")),
+            make_row("c.pdf", cust=val("Customer No.", "K-2"))]
+    assert with_hints([Column("cust", "Customer No.")], rows)[0].hint == 'Example values: "K-1", "K-2".'
+
+
+def test_merge_keeps_label_when_model_answers_a_key(server):
+    a = make_row("a.pdf", line_items=table("Line Items", ["A"], [{"A": "1"}]))
+    server.reply = mapping({"Line Items": "line_items"})
+    merge([a], llm_settings(server))
+    assert list(a.cells) == ["line_items"] and a.cells["line_items"].label == "Line Items"
