@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "invoice-extract"
 version = "0.1.0"
-description = "Turn invoices (PDF, scans, e-invoices) into one table with columns you choose, using any OpenAI-compatible model"
+description = "Turn the invoices you receive (PDF, scans, photos, XRechnung, ZUGFeRD) into one checked table for your bookkeeping, with any OpenAI-compatible model"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"

@@ -1,24 +1,21 @@
 # invoice-extract
 
-A lightweight Python tool for invoices, with a language model of your choice:
+The invoices you receive go in, one checked table for your bookkeeping comes out.
 
-- **Normal invoices to e-invoices:** a PDF, scan or photo goes in, a valid **XRechnung** or **ZUGFeRD** comes out. The model reads every field an EN 16931 e-invoice needs, you check and complete them next to the page, and nothing invalid is written.
-- **Invoices to one table:** many invoices become one Excel, CSV or JSON file.
-
-For the table, you upload invoices, a language model of your choice finds everything on them (values, text blocks and tables such as the line items), and you only pick what goes into the export. Fields that mean the same thing on different invoices are merged into one column, and each value comes with the place on the page where it was found. E-invoices are read straight from their XML, without a model. The result is an Excel, CSV or JSON file.
+Drop in everything that lands in your inbox: PDFs, scans, photos, **XRechnung** and **ZUGFeRD** e-invoices. invoice-extract puts them into one table with the columns a bookkeeper expects, checks every invoice (totals, VAT rate, IBAN, dates, mandatory fields, duplicates), shows where on the page each value was found, and exports Excel, CSV or JSON. E-invoices are read exactly from their XML, without a model, and shown like a paper invoice, ready to print. PDFs and scans are read by a language model of your choice.
 
 invoice-extract currently supports:
 
-- ZUGFeRD / Factur-X (PDF with embedded XML)
 - XRechnung (UBL and CII)
+- ZUGFeRD / Factur-X (PDF with embedded XML)
 - Digital PDF
 - Scans and photos (PDF without text, PNG, JPG, WEBP, GIF, BMP, TIFF)
 
 ## Prerequisites
 
 - Python 3.9 or newer
-- A server with an OpenAI-compatible API (for example Ollama, vLLM, LM Studio, a university server or a cloud provider)
-- A **vision-capable model** for scans and photos. A text-only model is enough for digital PDFs. E-invoices need no model at all.
+- For PDFs and scans: a server with an OpenAI-compatible API (for example Ollama, vLLM, LM Studio, a university server or a cloud provider). E-invoices need no model at all.
+- A **vision-capable model** for scans and photos. A text-only model is enough for digital PDFs.
 - An API key is optional. Many self-hosted servers do not need one.
 
 If you run your own model, your invoices stay on your own network. Nothing leaves your machine or data center.
@@ -29,7 +26,7 @@ If you run your own model, your invoices stay on your own network. Nothing leave
 pip install invoice-extract
 ```
 
-With the web UI:
+With the web page:
 
 ```bash
 pip install "invoice-extract[ui]"
@@ -45,9 +42,7 @@ pip install ".[ui]"
 
 ## Usage
 
-### E-invoices (XRechnung / ZUGFeRD)
-
-German companies must receive e-invoices since 2025 and send them from 2027/2028. invoice-extract turns a normal invoice into one:
+### Web page
 
 ```bash
 invoice-extract serve --base-url http://localhost:11434/v1 --model your-model
@@ -55,74 +50,22 @@ invoice-extract serve --base-url http://localhost:11434/v1 --model your-model
 
 Open http://127.0.0.1:8000 and drop your invoices onto the page.
 
-- **Read:** the model reads seller, buyer, number, dates, service period, payment (transfer or direct debit with mandate and creditor ID), the lines and the totals. Each read value has a box on the page.
-- **Check:** the form on the right shows every field. Problems are listed on top and marked at the field, with the rule they come from (EN 16931 or the German XRechnung rules BR-DE). Lines and totals are recomputed from what you type, and the printed totals are compared with them.
-- **Your company:** "My company" stores your own seller data (address, VAT ID, contact person, phone, e-mail, IBAN). It replaces the seller fields read from your invoices and fills what is rarely printed. Save it as YAML and load it next time.
-- **Write:** choose **XRechnung** (CII XML) or **ZUGFeRD** (the original PDF with the same XML embedded; a scan or photo is turned into a PDF first). "Download" stays disabled until the invoice is valid for the chosen format.
+- **The table** has one row per invoice: Type, Supplier, Supplier VAT ID, Invoice No., Invoice Date, Due Date, Description, Net, VAT Rate, VAT, Gross, Currency, IBAN and Status. Click a cell to correct it; edited cells are marked and the checks run again.
+- **The page** below shows the selected invoice with a box around every value the model read. Click a value on the right to jump to it. An XRechnung has no page, so it is shown as an invoice sheet instead; a ZUGFeRD PDF shows its page and, behind "Show e-invoice data", the same sheet. "Print" prints the sheet alone, so your browser can save it as a PDF.
+- **Checks** lists what to look at: a total that does not add up, a VAT amount that does not match the rate, an invalid IBAN, a missing invoice number, a supplier VAT ID missing on an invoice from 250.00 upwards, or the same invoice number as another file.
+- **Export** writes the table as Excel, CSV or JSON.
 
-From the command line:
-
-```bash
-invoice-extract einvoice invoice.pdf scan.jpg --format xrechnung --profile company.yaml -o out/ \
-  --base-url http://localhost:11434/v1 --model your-model
-```
-
-Valid invoices are written as `<name>.xml` (XRechnung) or `<name>-zugferd.pdf` (ZUGFeRD); for the others the problems are listed. The exit code is 1 if any file could not be written. A company profile looks like this:
-
-```yaml
-seller:
-  name: My Shop GmbH
-  street: Main Street 1
-  postcode: "12345"
-  city: Berlin
-  country: DE
-  vat_id: DE123456789          # or tax_number plus legal_id (e.g. "HRB 12345") if you have no VAT ID
-  contact_name: Jane Doe
-  phone: "+49 30 123456"
-  email: billing@example.com
-iban: DE89370400440532013000
-payment_terms: Payable within 14 days.
-```
-
-From Python:
-
-```python
-from invoice_extract.einvoicing import convert_many, write
-
-for conversion in convert_many(["invoice.pdf"], base_url=..., model=...):
-    problems = [i for i in conversion.issues("xrechnung") if i.level == "error"]
-    if not problems:
-        write(conversion, "xrechnung", "out/")
-```
-
-Good to know:
-
-- XRechnung asks for more than most printed invoices show: a buyer reference (Leitweg-ID, or any reference agreed with the buyer), a seller contact person, phone and e-mail, and the buyer's e-mail address. ZUGFeRD (EN 16931) shows these as warnings only.
-- The XML follows EN 16931 in the CII syntax and was checked with the official KoSIT validator (XRechnung 3.0.2 configuration). For your own invoices, you can check the files the same way: [KoSIT validator](https://github.com/itplr-kosit/validator).
-- A ZUGFeRD PDF contains a valid XML, but the PDF itself is only as PDF/A-3 conform as your source PDF.
-- VAT categories: standard rate (S), zero rated (Z), exempt (E, e.g. small businesses under § 19 UStG, with the exemption reason) and reverse charge (AE). Discounts and credits are written with a negative quantity, as EN 16931 requires.
-- Not supported yet: the categories K, G and O, allowances and charges on document level, prepayments, UBL output.
-- An invoice that already is an e-invoice is reported as such and not converted.
-
-### Web UI (table)
+Want other columns? Start the page with a template (see [Templates](#templates)):
 
 ```bash
-invoice-extract serve --base-url http://localhost:11434/v1 --model your-model
+invoice-extract serve --template my-columns.yaml --base-url ... --model ...
 ```
 
-Then open http://127.0.0.1:8000/table and drop your invoices onto the page.
-
-- On the left you see every field the model found in all invoices, grouped into values, text blocks and tables, with a count such as "6/10" (found in 6 of 10 invoices). Everything starts ticked. Untick what you do not need.
-- On the right you see the current invoice with a coloured box around every field. Unticked fields stay visible but faded. Flip through the invoices with ‹ › or the arrow keys, and click a field name to jump to its box.
-- At the bottom you see the export preview: one row per invoice, plus one tab per selected table (for example the line items). Click a cell to correct it; edited cells are marked and the checks run again.
-- "Save as template" stores your selection. Next time, "Load template" makes the model sort new invoices into exactly these fields. "Use all fields" goes back to finding everything.
-- "Export" writes Excel, CSV or JSON with the selected fields only.
-
-The UI has no login. It listens on 127.0.0.1 by default and only answers requests for localhost, so other websites cannot reach it. Only use `--host 0.0.0.0` on a trusted network.
+The page has no login. It listens on 127.0.0.1 by default and only answers requests for localhost, so other websites cannot reach it. Only use `--host 0.0.0.0` on a trusted network.
 
 ### Command-Line
 
-Put several invoices into one Excel file with every field the model finds:
+Put many invoices into one Excel file:
 
 ```bash
 invoice-extract *.pdf invoices/*.xml --base-url http://localhost:11434/v1 --model your-model
@@ -134,16 +77,11 @@ This writes `invoices.xlsx`. If it already exists, a number is added instead (`i
 invoice-extract *.pdf -o october.csv --base-url http://localhost:11434/v1 --model your-model
 ```
 
-Use exactly the fields of a template (for example one saved in the web UI):
+Add your own columns to the standard ones, or use exactly the columns of a template:
 
 ```bash
-invoice-extract *.pdf --template suppliers.yaml --base-url http://localhost:11434/v1 --model your-model
-```
-
-Or the standard columns (File, Supplier, Invoice No., Invoice Date, Due Date, Net, VAT, Gross, Currency, IBAN, Status) plus your own:
-
-```bash
-invoice-extract *.pdf --column "Order No." --column "Customer No." --base-url http://localhost:11434/v1 --model your-model
+invoice-extract *.pdf --column "Cost Center" --base-url ... --model ...
+invoice-extract *.pdf --template my-columns.yaml --base-url ... --model ...
 ```
 
 Use a different model for scans:
@@ -171,25 +109,22 @@ docker run -p 8000:8000 \
   invoice-extract
 ```
 
-The container starts the web UI on port 8000 and reads its settings from the `INVOICE_EXTRACT_*` environment variables. The UI has no login, so do not expose the port to the internet.
+The container starts the web page on port 8000 and reads its settings from the `INVOICE_EXTRACT_*` environment variables. The page has no login, so do not expose the port to the internet.
 
 ### Python API
 
-Find every field and merge them across the invoices:
-
 ```python
-from invoice_extract import export, export_columns, extract_many, fields_of
+from invoice_extract import export, extract_many
 
 rows = extract_many(["a.pdf", "b.xml", "scan.jpg"], base_url="http://localhost:11434/v1", model="your-model")
-fields = fields_of(rows)  # one Column per field found, most frequent first
 for row in rows:
     print(row.path, row.status, row.error or {key: cell.value for key, cell in row.cells.items()})
-
-wanted = [f for f in fields if f.kind != "text"]  # your selection
-export(rows, "invoices.xlsx", export_columns(wanted))
+export(rows, "invoices.xlsx")
 ```
 
-Or fill fixed columns:
+`extract_many` fills the standard columns, keeps the input order and checks for duplicates across the files. If one file fails, the others continue and the error is stored in that row. Each cell has `value`, `raw` (the text as printed), `page`, `box` (the position on the page, from 0 to 1), `source` (`xml`, `text`, `vision` or `manual`) and `checks`.
+
+Your own columns:
 
 ```python
 from invoice_extract import STANDARD_COLUMNS, column, extract_many
@@ -197,8 +132,6 @@ from invoice_extract import STANDARD_COLUMNS, column, extract_many
 columns = STANDARD_COLUMNS + [column("Order No.", hint="starts with PO-")]
 rows = extract_many(["a.pdf", "b.xml"], columns, base_url=..., model=...)
 ```
-
-`extract_many` keeps the input order. If one file fails, the others continue and the error is stored in that row. Each cell has `value`, `raw` (the text as printed), `page`, `box` (the position on the page, from 0 to 1), `source` (`xml`, `text` or `vision`), `label`, and `kind`: `value`, `text` (the value is the whole text) or `table` (the value is a list of rows, `columns` names them).
 
 Add columns later without reading the whole invoice again:
 
@@ -208,31 +141,42 @@ from invoice_extract import add_columns, column
 rows = [add_columns(row, [column("Customer No.")], base_url=..., model=...) for row in rows]
 ```
 
+Read an e-invoice as a document, with parties, lines, tax groups, totals and payment details:
+
+```python
+from invoice_extract.einvoice import parse_document
+
+doc = parse_document(open("xrechnung.xml", "rb").read())
+print(doc["seller"]["name"], doc["totals"]["gross"], doc["payment"]["iban"])
+```
+
 ### Templates
 
-A template is a YAML file with a list of fields. `label` is required. `hint` helps the model, `type` (`text`, `date`, `amount` or `iban`) controls normalization and checks, and `kind` is `value` (default), `text` or `table`. A table lists its `table_columns`.
+A template is a YAML file with a list of columns. `label` is required. `hint` helps the model, `type` (`text`, `date`, `amount`, `iban`, `percent` or `doctype`) controls normalization and checks, `role` gives a column the meaning of a standard column so the checks apply to it, and `kind` is `value` (default), `text` or `table`. A table lists its `table_columns`.
 
 ```yaml
-name: suppliers
+name: my-columns
 columns:
-  - label: Supplier
+  - label: Lieferant
+    role: supplier
     required: true
-  - label: Gross
+  - label: Brutto
     type: amount
-  - label: Order No.
-    hint: PO number, starts with PO-
-  - label: Payment Note
-    kind: text
+    role: gross
+  - label: Cost Center
+    hint: the cost center printed next to the order number
   - label: Line Items
     kind: table
     table_columns: [Description, Quantity, Unit Price, Amount]
 ```
 
+The standard columns and their roles are `doc_type`, `supplier`, `supplier_vat_id`, `invoice_no`, `invoice_date`, `due_date`, `description`, `net`, `vat_rate`, `vat`, `gross`, `currency` and `iban`. The standard columns of an e-invoice, including the line items table, come straight from the XML.
+
 ### Export
 
-- **Excel:** sheet "Invoices" has one row per invoice with the selected values and text blocks, plus Status. Sheet "Details" has one row per value with the raw text, source, page and checks. Every selected table gets its own sheet (for example "Line Items") with one row per table row, linked to its invoice by file name and invoice number.
-- **CSV:** the invoices table in the named file. Each selected table goes into its own file next to it, `<name>-<field>.csv`. In the web UI, a CSV export with tables is downloaded as one ZIP.
-- **JSON:** the selected fields of every invoice, including tables.
+- **Excel:** sheet "Invoices" has one row per invoice, plus Status. Sheet "Details" has one row per value with the raw text, source, page and checks. A table column (for example line items) gets its own sheet with one row per table row.
+- **CSV:** the invoices table in the named file. A table column goes into its own file next to it, `<name>-<column>.csv`; on the web page, such an export is downloaded as one ZIP.
+- **JSON:** every column of every invoice.
 
 Values that start with `=`, `+`, `-` or `@` are written as text in Excel and CSV, so a hostile invoice cannot smuggle a formula into your spreadsheet.
 
@@ -256,19 +200,49 @@ If a limit is exceeded, the file is rejected with a message naming the limit and
 
 ## Checks and statuses
 
-Every invoice gets a status. The checks do not use the model; they work on the fields the model marks as supplier, invoice number, dates, net, VAT, gross, currency and IBAN, whatever the field is called.
+Every invoice gets a status. The checks do not use the model.
 
 - **ok**: all checks passed.
-- **warning**: something needs a look, for example a value does not match the text printed on the page, the due date is before the invoice date, a field has no box on the page, or two values on one invoice look like the same total.
+- **warning**: something needs a look. The VAT amount does not match the VAT rate, the due date is before the invoice date, a required value is missing, a value does not match the text printed on the page, the supplier VAT ID is missing on an invoice from 250.00 upwards (small-amount invoices below that need none), or another file has the same supplier and invoice number.
 - **error**: net + VAT does not equal gross, the IBAN checksum is wrong, or the file could not be read.
 
 One file is one invoice. A PDF with several invoices in it becomes one row.
 
+## Writing e-invoices
+
+For the other direction, when a customer wants an XRechnung or ZUGFeRD from you, the command line turns your own PDF invoice into one:
+
+```bash
+invoice-extract einvoice invoice.pdf --format xrechnung --profile company.yaml -o out/ \
+  --base-url http://localhost:11434/v1 --model your-model
+```
+
+The model reads every field an EN 16931 e-invoice needs, the rules of EN 16931 and XRechnung (BR-DE) are checked, and only valid invoices are written: `<name>.xml` (XRechnung, CII syntax) or `<name>-zugferd.pdf` (the PDF with the XML embedded). The problems of the others are listed. A company profile fills your own seller data that is rarely printed:
+
+```yaml
+seller:
+  name: My Shop GmbH
+  street: Main Street 1
+  postcode: "12345"
+  city: Berlin
+  country: DE
+  vat_id: DE123456789          # or tax_number plus legal_id (e.g. "HRB 12345") if you have no VAT ID
+  contact_name: Jane Doe
+  phone: "+49 30 123456"
+  email: billing@example.com
+iban: DE89370400440532013000
+payment_terms: Payable within 14 days.
+```
+
+Good to know: the XML was checked with the official [KoSIT validator](https://github.com/itplr-kosit/validator) (XRechnung 3.0.2). XRechnung asks for a buyer reference (Leitweg-ID), a seller contact with phone and e-mail, and the buyer's e-mail. A ZUGFeRD PDF is only as PDF/A-3 conform as your source PDF. Supported VAT categories: standard (S), zero rated (Z), exempt (E) and reverse charge (AE). From Python, use `invoice_extract.einvoicing.convert_many` and `write`.
+
 ## Limitations
 
-Quality depends on the chosen model. Finding every field asks a lot of a model: on a real two-page invoice, a 7B model (qwen2.5:7b) found about 15 fields, a 30B mixture-of-experts model (qwen3:30b-a3b) found 24 in about the same time. Use a model of 20B or more if you can. A small model may miss fields, misread poor scans or merge fields that only look alike. Check the rows marked warning or error, and spot-check the rest. A saved template makes later runs more consistent.
+Quality depends on the chosen model. A 7B model misses fields on longer invoices; a model of 20B or more (for example qwen3:30b-a3b) reads a two-page invoice well. A small model may misread poor scans. Check the rows marked warning or error, and spot-check the rest. E-invoices are always exact.
 
 Boxes on scans come from the vision model and are best effort. Boxes on digital PDFs come from the text layer and are exact.
+
+Incoming e-invoices are read and checked arithmetically, not validated against the full EN 16931 rule set; use the KoSIT validator for that.
 
 ## Running Tests
 
