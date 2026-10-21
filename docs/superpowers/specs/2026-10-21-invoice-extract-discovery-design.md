@@ -1,7 +1,7 @@
 # invoice-extract v2 design: the model finds everything, the user only picks
 
 Date: 2026-10-21
-Status: draft
+Status: approved
 Builds on: `2026-10-21-invoice-extract-design.md` (v1, implemented). Everything in v1 that this document does not change stays as it is: the three reading paths (e-invoice, digital PDF, scan), the provider rules, packaging, Docker, limits, checks, formula-safe export, the web server's security rules, and the library/CLI/UI split.
 
 ## Intent
