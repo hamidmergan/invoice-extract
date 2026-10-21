@@ -44,6 +44,8 @@ def test_zugferd_no_model_no_requests(tmp_path, server):
         assert row.cells["gross"].value == Decimal("119.00")
         assert row.cells["gross"].source == "xml"
         assert row.cells["file"].value == path.name
+        assert row.cells["vat_rate"].value == "19" and row.cells["doc_type"].value == "invoice"
+        assert row.cells["supplier_vat_id"].value == "DE123456789" and row.cells["description"].value == "Paper"
     assert server.requests == []
 
 

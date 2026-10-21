@@ -13,7 +13,7 @@ from .checks import run_checks
 from .columns import RESERVED, STANDARD_COLUMNS, Column
 from .config import Settings, resolve
 from .detect import detect, embedded_xml
-from .einvoice import CII_PATHS, LINE_COLUMNS, UBL_PATHS, parse_line_items, parse_xml, xml_text
+from .einvoice import LINE_COLUMNS, XML_KEYS, parse_line_items, parse_xml, xml_text
 from .errors import LimitError, ModelError
 from .llm import fill_columns, make_client, vision_boxes
 from .normalize import display_variants, normalize
@@ -23,7 +23,6 @@ from .results import Cell, Check, Row
 PathLike = Union[str, Path]
 ClientGetter = Callable[[], openai.OpenAI]
 
-XML_KEYS = set(CII_PATHS) | set(UBL_PATHS)
 SOURCE = {"xml": "xml", "zugferd": "xml", "pdf": "text", "scan": "vision"}
 VISION_HINT = "; set a vision-capable model with --vision-model or INVOICE_EXTRACT_VISION_MODEL"
 _VISION_WORDS = ("image", "vision", "multimodal")

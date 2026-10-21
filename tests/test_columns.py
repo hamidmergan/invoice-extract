@@ -13,12 +13,21 @@ from invoice_extract.errors import ConfigError
 
 def test_standard_columns_order_and_keys():
     assert [c.key for c in STANDARD_COLUMNS] == [
-        "file", "supplier", "invoice_no", "invoice_date", "due_date",
-        "net", "vat", "gross", "currency", "iban", "status",
+        "file", "doc_type", "supplier", "supplier_vat_id", "invoice_no", "invoice_date", "due_date", "description",
+        "net", "vat_rate", "vat", "gross", "currency", "iban", "status",
     ]
     required = {c.key for c in STANDARD_COLUMNS if c.required}
     assert required == {"supplier", "invoice_no", "invoice_date", "gross"}
     assert RESERVED == {"file", "status"}
+    types = {c.key: c.type for c in STANDARD_COLUMNS}
+    assert types["doc_type"] == "doctype" and types["vat_rate"] == "percent" and types["description"] == "text"
+    assert all(c.role == c.key for c in STANDARD_COLUMNS if c.key not in RESERVED)
+    assert all(c.hint for c in STANDARD_COLUMNS if c.key not in RESERVED)
+
+
+def test_roles_cover_the_standard_columns():
+    from invoice_extract.columns import ROLES
+    assert set(ROLES) == {c.key for c in STANDARD_COLUMNS if c.key not in RESERVED}
 
 
 def test_make_key_unique():

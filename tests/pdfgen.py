@@ -72,6 +72,10 @@ SAMPLE = {
     "vat": "19.00",
     "gross": "119.00",
     "iban": "DE89370400440532013000",
+    "doc_type": "invoice",
+    "supplier_vat_id": "DE123456789",
+    "vat_rate": "19.00",
+    "description": "Paper",
 }
 
 
@@ -87,6 +91,7 @@ def cii_xml(**values) -> bytes:
     xmlns:udt="urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100">
   <rsm:ExchangedDocument>
     <ram:ID>{v["invoice_no"]}</ram:ID>
+    <ram:TypeCode>380</ram:TypeCode>
     <ram:IssueDateTime><udt:DateTimeString format="102">{issue}</udt:DateTimeString></ram:IssueDateTime>
   </rsm:ExchangedDocument>
   <rsm:SupplyChainTradeTransaction>
@@ -103,13 +108,23 @@ def cii_xml(**values) -> bytes:
       </ram:SpecifiedLineTradeSettlement>
     </ram:IncludedSupplyChainTradeLineItem>
     <ram:ApplicableHeaderTradeAgreement>
-      <ram:SellerTradeParty><ram:Name>{v["supplier"]}</ram:Name></ram:SellerTradeParty>
+      <ram:SellerTradeParty>
+        <ram:Name>{v["supplier"]}</ram:Name>
+        <ram:SpecifiedTaxRegistration><ram:ID schemeID="VA">{v["supplier_vat_id"]}</ram:ID></ram:SpecifiedTaxRegistration>
+      </ram:SellerTradeParty>
     </ram:ApplicableHeaderTradeAgreement>
     <ram:ApplicableHeaderTradeSettlement>
       <ram:InvoiceCurrencyCode>{v["currency"]}</ram:InvoiceCurrencyCode>
       <ram:SpecifiedTradeSettlementPaymentMeans>
         <ram:PayeePartyCreditorFinancialAccount><ram:IBANID>{v["iban"]}</ram:IBANID></ram:PayeePartyCreditorFinancialAccount>
       </ram:SpecifiedTradeSettlementPaymentMeans>
+      <ram:ApplicableTradeTax>
+        <ram:CalculatedAmount>{v["vat"]}</ram:CalculatedAmount>
+        <ram:TypeCode>VAT</ram:TypeCode>
+        <ram:BasisAmount>{v["net"]}</ram:BasisAmount>
+        <ram:CategoryCode>S</ram:CategoryCode>
+        <ram:RateApplicablePercent>{v["vat_rate"]}</ram:RateApplicablePercent>
+      </ram:ApplicableTradeTax>
       <ram:SpecifiedTradePaymentTerms>
         <ram:DueDateDateTime><udt:DateTimeString format="102">{due}</udt:DateTimeString></ram:DueDateDateTime>
       </ram:SpecifiedTradePaymentTerms>
@@ -139,17 +154,29 @@ def ubl_xml(party_name_only: bool = False, **values) -> bytes:
   <cbc:ID>{v["invoice_no"]}</cbc:ID>
   <cbc:IssueDate>{v["invoice_date"]}</cbc:IssueDate>
   <cbc:DueDate>{v["due_date"]}</cbc:DueDate>
+  <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>
   <cbc:DocumentCurrencyCode>{v["currency"]}</cbc:DocumentCurrencyCode>
   <cac:AccountingSupplierParty>
     <cac:Party>
       <cac:PartyName><cbc:Name>{v["supplier"]}</cbc:Name></cac:PartyName>
+      <cac:PartyTaxScheme>
+        <cbc:CompanyID>{v["supplier_vat_id"]}</cbc:CompanyID>
+        <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
+      </cac:PartyTaxScheme>
       {legal}
     </cac:Party>
   </cac:AccountingSupplierParty>
   <cac:PaymentMeans>
     <cac:PayeeFinancialAccount><cbc:ID>{v["iban"]}</cbc:ID></cac:PayeeFinancialAccount>
   </cac:PaymentMeans>
-  <cac:TaxTotal><cbc:TaxAmount currencyID="{v["currency"]}">{v["vat"]}</cbc:TaxAmount></cac:TaxTotal>
+  <cac:TaxTotal>
+    <cbc:TaxAmount currencyID="{v["currency"]}">{v["vat"]}</cbc:TaxAmount>
+    <cac:TaxSubtotal>
+      <cbc:TaxableAmount currencyID="{v["currency"]}">{v["net"]}</cbc:TaxableAmount>
+      <cbc:TaxAmount currencyID="{v["currency"]}">{v["vat"]}</cbc:TaxAmount>
+      <cac:TaxCategory><cbc:ID>S</cbc:ID><cbc:Percent>{v["vat_rate"]}</cbc:Percent><cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:TaxCategory>
+    </cac:TaxSubtotal>
+  </cac:TaxTotal>
   <cac:LegalMonetaryTotal>
     <cbc:TaxExclusiveAmount currencyID="{v["currency"]}">{v["net"]}</cbc:TaxExclusiveAmount>
     <cbc:TaxInclusiveAmount currencyID="{v["currency"]}">{v["gross"]}</cbc:TaxInclusiveAmount>

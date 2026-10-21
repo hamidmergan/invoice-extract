@@ -1,6 +1,8 @@
 import datetime
 from decimal import Decimal
 
+import pytest
+
 from invoice_extract.normalize import display_variants, normalize
 
 
@@ -82,6 +84,29 @@ def test_no_raw_no_checks():
 def test_text_and_none():
     assert normalize("text", "  ACME GmbH ", "") == ("ACME GmbH", [])
     assert normalize("text", None, "") == (None, [])
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("19 %", "19"), ("0.19", "19"), ("19,00", "19"), ("19 % / 7 %", "19, 7"), (19, "19"), ("0", "0"),
+    ("5.5", "5.5"), ("MwSt 19% zzgl. 7%", "19, 7"), ("19 %, 19 %", "19"), ("", None), (None, None), (0.07, "7"),
+    ("20", "20"),
+])
+def test_percent_forms(value, expected):
+    assert normalize("percent", value, "") == (expected, [])
+
+
+def test_percent_unparsed_kept():
+    value, checks = normalize("percent", "none", "")
+    assert value == "none" and names(checks) == ["unparsed"]
+    assert display_variants("percent", "19, 7") == ["19 %", "19%", "7 %", "7%", "19", "7"]
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("Gutschrift", "credit note"), ("Credit Note", "credit note"), ("Stornorechnung", "credit note"),
+    ("Rechnung", "invoice"), ("invoice", "invoice"), ("", None), (None, None),
+])
+def test_doctype_forms(value, expected):
+    assert normalize("doctype", value, "") == (expected, [])
 
 
 def test_iban_cleanup():

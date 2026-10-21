@@ -122,14 +122,45 @@ def _typed(kind: str, value: Any, raw: Optional[str]) -> Tuple[Any, List[Check]]
     return parsed, _compare(kind, parsed, candidates, raw)
 
 
+_PERCENT = re.compile(r"\d+(?:[.,]\d+)?")
+CREDIT_WORDS = ("credit", "gutschrift", "storno", "cancel")
+
+
+def percent_rates(value: Any) -> List[str]:
+    """Every rate in `value` as plain percent text: "19 % / 7 %" -> ["19", "7"], 0.19 -> ["19"]."""
+    tokens = [str(value)] if isinstance(value, (int, float, Decimal)) else _PERCENT.findall(str(value))
+    rates: List[str] = []
+    for token in tokens:
+        text = token.replace(",", ".")
+        number = Decimal(text)
+        if "." in text and 0 < number <= 1:
+            number *= 100  # written as a fraction, e.g. 0.19
+        rate = format(number.normalize(), "f")
+        if rate not in rates:
+            rates.append(rate)
+    return rates
+
+
+def _doctype(value: Any) -> str:
+    text = str(value).strip().lower()
+    return "credit note" if any(word in text for word in CREDIT_WORDS) else "invoice"
+
+
 def normalize(type: str, value: Any, raw: Optional[str]) -> Tuple[Any, List[Check]]:
     """Clean `value` for a column of `type`; `raw` is the text as printed, used for checks."""
-    if value is None or (isinstance(value, str) and not value.strip() and type in ("date", "amount", "iban")):
+    if value is None or (isinstance(value, str) and not value.strip() and type != "text"):
         return None, []
     if type in ("date", "amount"):
         return _typed(type, value, raw)
     if type == "iban":
         return "".join(str(value).split()).upper(), []
+    if type == "percent":
+        rates = percent_rates(value)
+        if not rates:
+            return str(value).strip(), [Check("unparsed", "warning", f'Could not read "{value}" as a VAT rate')]
+        return ", ".join(rates), []
+    if type == "doctype":
+        return _doctype(value), []
     if type == "text":
         return str(value).strip(), []
     return value, []
@@ -137,6 +168,9 @@ def normalize(type: str, value: Any, raw: Optional[str]) -> Tuple[Any, List[Chec
 
 def display_variants(type: str, value: Any) -> List[str]:
     """Ways a value may be printed, used to find it on the page."""
+    if type == "percent" and isinstance(value, str):
+        rates = [r.strip() for r in value.split(",") if r.strip()]
+        return [f"{r}{sep}%" for r in rates for sep in (" ", "")] + rates
     if type == "date" and isinstance(value, datetime.date):
         return [value.strftime(f) for f in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y")]
     if type == "amount" and isinstance(value, Decimal):

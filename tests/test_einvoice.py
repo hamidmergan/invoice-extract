@@ -38,6 +38,42 @@ def test_parse_ubl_credit_note():
     data = ubl_xml().replace(b"<Invoice ", b"<CreditNote ").replace(b"</Invoice>", b"</CreditNote>")
     data = data.replace(b"xsd:Invoice-2", b"xsd:CreditNote-2")
     assert parse_xml(data)["gross"] == "119.00"
+    assert parse_xml(data)["doc_type"] == "credit note"
+    assert parse_xml(cii_xml().replace(b"<ram:TypeCode>380<", b"<ram:TypeCode>381<"))["doc_type"] == "credit note"
+
+
+def test_parse_description_joins_lines_and_cuts():
+    line = cii_xml().split(b"<ram:IncludedSupplyChainTradeLineItem>")[1].split(b"</ram:IncludedSupplyChainTradeLineItem>")[0]
+    def with_names(*names):
+        items = b"".join(b"<ram:IncludedSupplyChainTradeLineItem>" + line.replace(b"Paper", n.encode())
+                         + b"</ram:IncludedSupplyChainTradeLineItem>" for n in names)
+        return cii_xml().replace(b"<ram:IncludedSupplyChainTradeLineItem>" + line
+                                 + b"</ram:IncludedSupplyChainTradeLineItem>", items)
+    assert parse_xml(with_names("A", "B", "C"))["description"] == "A; B; C"
+    long = parse_xml(with_names("x" * 100))["description"]
+    assert len(long) == 80 and long.endswith("…")
+
+
+def test_parse_vat_rates_mixed():
+    tax = cii_xml().split(b"<ram:ApplicableTradeTax>")[1].split(b"</ram:ApplicableTradeTax>")[0]
+    second = b"<ram:ApplicableTradeTax>" + tax.replace(b"19.00", b"7.00") + b"</ram:ApplicableTradeTax>"
+    data = cii_xml().replace(b"</ram:ApplicableTradeTax>", b"</ram:ApplicableTradeTax>" + second)
+    assert parse_xml(data)["vat_rate"] == "19.00, 7.00"
+    ubl = ubl_xml().replace(b"</cac:TaxSubtotal>", b"</cac:TaxSubtotal><cac:TaxSubtotal><cac:TaxCategory>"
+                            b"<cbc:Percent>7.00</cbc:Percent></cac:TaxCategory></cac:TaxSubtotal>")
+    assert parse_xml(ubl)["vat_rate"] == "19.00, 7.00"
+
+
+def test_parse_minimal_xml_has_no_new_keys():
+    import re
+    data = cii_xml()
+    data = re.sub(rb"<ram:TypeCode>380</ram:TypeCode>|<ram:SpecifiedTaxRegistration>.*?</ram:SpecifiedTaxRegistration>"
+                  rb"|<ram:ApplicableTradeTax>.*?</ram:ApplicableTradeTax>"
+                  rb"|<ram:IncludedSupplyChainTradeLineItem>.*?</ram:IncludedSupplyChainTradeLineItem>", b"", data,
+                  flags=re.S)
+    result = parse_xml(data)
+    assert not {"doc_type", "supplier_vat_id", "vat_rate", "description"} & set(result)
+    assert result["gross"] == "119.00"
 
 
 def test_parse_skips_missing_fields():

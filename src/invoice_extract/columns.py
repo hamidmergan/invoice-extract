@@ -10,7 +10,7 @@ import yaml
 
 from .errors import ConfigError
 
-TYPES = ("text", "date", "amount", "iban", "file", "status")
+TYPES = ("text", "date", "amount", "iban", "percent", "doctype", "file", "status")
 
 # Filled by invoice-extract itself, never sent to the LLM.
 RESERVED = {"file", "status"}
@@ -19,7 +19,8 @@ RESERVED = {"file", "status"}
 KINDS = ("value", "text", "table")
 
 # Meanings the checks rely on; each equals the key of the standard column with that meaning.
-ROLES = ("supplier", "invoice_no", "invoice_date", "due_date", "net", "vat", "gross", "currency", "iban")
+ROLES = ("doc_type", "supplier", "supplier_vat_id", "invoice_no", "invoice_date", "due_date", "description", "net",
+         "vat_rate", "vat", "gross", "currency", "iban")
 
 
 @dataclass
@@ -34,17 +35,30 @@ class Column:
     table_columns: List[str] = field(default_factory=list)
 
 
+def _standard(key: str, label: str, hint: str, type: str = "text", required: bool = False) -> Column:
+    return Column(key, label, hint=hint, required=required, type=type, role=key)
+
+
+# The columns a bookkeeper expects, in table order. Keys are stable API; each key is also its role.
 STANDARD_COLUMNS: List[Column] = [
     Column("file", "File", type="file"),
-    Column("supplier", "Supplier", required=True),
-    Column("invoice_no", "Invoice No.", required=True),
-    Column("invoice_date", "Invoice Date", required=True, type="date"),
-    Column("due_date", "Due Date", type="date"),
-    Column("net", "Net", type="amount"),
-    Column("vat", "VAT", type="amount"),
-    Column("gross", "Gross", required=True, type="amount"),
-    Column("currency", "Currency"),
-    Column("iban", "IBAN", type="iban"),
+    _standard("doc_type", "Type", 'Write "credit note" if the document is a credit note (Gutschrift) or a '
+                                  'cancellation, otherwise "invoice".', "doctype"),
+    _standard("supplier", "Supplier", "Name of the company that issued the invoice.", required=True),
+    _standard("supplier_vat_id", "Supplier VAT ID", "VAT identification number (USt-IdNr., e.g. DE123456789) or "
+                                                    "tax number of the supplier, as printed."),
+    _standard("invoice_no", "Invoice No.", "The invoice number.", required=True),
+    _standard("invoice_date", "Invoice Date", "The issue date of the invoice.", "date", required=True),
+    _standard("due_date", "Due Date", "Date by which the amount is paid or debited.", "date"),
+    _standard("description", "Description", "What the invoice is for, as printed: the subject line or the first "
+                                            "line item, e.g. 'Mobile plan October 2026'."),
+    _standard("net", "Net", "Total amount without VAT.", "amount"),
+    _standard("vat_rate", "VAT Rate", "VAT rate in percent, e.g. 19; several rates as '19, 7'; 0 when no VAT "
+                                      "is charged.", "percent"),
+    _standard("vat", "VAT", "Total VAT amount.", "amount"),
+    _standard("gross", "Gross", "Total amount including VAT, the amount to pay.", "amount", required=True),
+    _standard("currency", "Currency", "3-letter ISO currency code, e.g. EUR."),
+    _standard("iban", "IBAN", "The supplier's bank account (IBAN) for the payment.", "iban"),
     Column("status", "Status", type="status"),
 ]
 
