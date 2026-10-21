@@ -39,6 +39,9 @@ Answer with one JSON object and nothing else: {"items": [...]}. Each item is one
   "source_text": "<first row as printed>", "end_text": "<last row as printed>", "page": N}
 Rules:
 - List every value, every paragraph of text and every table. Do not leave anything out.
+- Work through the text from top to bottom, line by line. Every line that holds information belongs to an item:
+  labelled values such as "Customer No. 123" or "Phone 0151 ..." are values, sentences and paragraphs are text
+  blocks, rows with several columns are tables. A typical invoice gives 15 to 40 items.
 - label is a short English name for what the item is, whatever language the invoice is in,
   e.g. "Invoice No.", "Billing Period", "Payment Note", "Line Items".
 - role says what a value means for bookkeeping. Set it whenever a value is the supplier name ("supplier"),
@@ -236,13 +239,40 @@ def discover_items(client: openai.OpenAI, model: str, text: str) -> List[dict]:
     """Ask the model for every value, text block and table on the invoice."""
     user = ("Answer in this shape (an example, not this invoice):\n" + json.dumps(DISCOVER_EXAMPLE, ensure_ascii=False)
             + "\n\nInvoice text:\n" + text)
-    data = _json_object(_chat(client, model, DISCOVER_PROMPT, user))
-    items = data.get("items")
+    answer = _chat(client, model, DISCOVER_PROMPT, user)
+    try:
+        items = _json_object(answer).get("items")
+    except ModelError:
+        items = _salvage_items(answer)  # long answers from small models often break near the end
+        if not items:
+            raise
     if not isinstance(items, list):
         raise ModelError("Model answer has no list of items.")
     found = [item for item in (_item(raw) for raw in items) if item is not None and item["label"]]
     _infer_roles(found)
     return found
+
+
+def _salvage_items(answer: str) -> List[Any]:
+    """The complete items of an `"items": [...]` list whose JSON is broken further on."""
+    answer = _THINK.sub("", answer)
+    start = answer.find('"items"')
+    start = answer.find("[", start) if start >= 0 else -1
+    if start < 0:
+        return []
+    decoder = json.JSONDecoder()
+    items: List[Any] = []
+    pos = start + 1
+    while True:
+        while pos < len(answer) and answer[pos] in " \t\r\n,":
+            pos += 1
+        if pos >= len(answer) or answer[pos] != "{":
+            return items
+        try:
+            item, pos = decoder.raw_decode(answer, pos)
+        except json.JSONDecodeError:
+            return items
+        items.append(item)
 
 
 def _infer_roles(items: List[dict]) -> None:

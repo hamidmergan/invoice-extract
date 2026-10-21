@@ -221,3 +221,19 @@ def test_discover_table_column_names_made_unique(server):  # I5a, M2
     assert t["rows"] == [{"Description": "Paper", "Column 2": "2", "Column 3": "pcs", "Amount": "10.00"}]
     assert u["columns"] == ["Amount", "Amount (2)"] and u["rows"] == [{"Amount": "1", "Amount (2)": "2"}]
     assert v["columns"] == ["Column 1", "Column 2"] and v["rows"][1] == {"Column 1": "c", "Column 2": ""}
+
+
+def test_discover_prompt_asks_for_every_line(server):
+    server.reply = lambda body: json.dumps({"items": []})
+    discover_items(client_for(server), "m", TEXT)
+    system = server.requests[0]["body"]["messages"][0]["content"]
+    assert "line by line" in system and "15 to 40 items" in system
+
+
+def test_discover_items_salvages_a_broken_answer(server):
+    good = json.dumps({"label": "Invoice No.", "kind": "value", "value": "R-1"})
+    other = json.dumps({"label": "Note", "kind": "text", "text": "Thanks"})
+    server.reply = lambda body: '{"items": [' + good + ", " + other + "]"  # the closing brace is missing
+    assert [i["label"] for i in discover_items(client_for(server), "m", TEXT)] == ["Invoice No.", "Note"]
+    server.reply = lambda body: '{"items": [' + good + ', {"label": "Cut", "kind": "val'  # cut off mid-item
+    assert [i["label"] for i in discover_items(client_for(server), "m", TEXT)] == ["Invoice No."]

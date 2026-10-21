@@ -52,3 +52,31 @@ def test_value_keeps_role_and_type(tmp_path):
 def test_empty_item_gives_empty_cell(tmp_path):
     cell = cell_from_item(tmp_path / "x.pdf", item_of(kind="table", columns=["A"]), "text", "text", True)
     assert cell.value is None and cell.kind == "table" and cell.checks == []
+
+
+def test_value_box_is_the_value_inside_its_source(tmp_path):
+    pdf = tmp_path / "t.pdf"
+    pdf.write_bytes(make_pdf([[(50, 700, "Invoice RE-7 dated 2026-10-21")]]))
+    item = item_of(label="Invoice No.", value="RE-7", source_text="Invoice RE-7 dated 2026-10-21", page=1)
+    cell = cell_from_item(pdf, item, "text", "text", locate_boxes=True)
+    whole = locate(pdf, "Invoice RE-7 dated 2026-10-21")
+    assert cell.box is not None and cell.box.x0 > whole.x0 and cell.box.x1 < whole.x1
+
+
+def test_value_box_ignores_a_source_without_the_value(tmp_path):
+    pdf = tmp_path / "t.pdf"
+    pdf.write_bytes(make_pdf([[(50, 700, "Net VAT Gross"), (50, 650, "100,00 19,00 119,00")]]))
+    item = item_of(label="Net", type="amount", value="100.00", source_text="Net VAT Gross", page=1)
+    cell = cell_from_item(pdf, item, "amount", "text", locate_boxes=True)
+    value = locate(pdf, "100,00")
+    assert cell.box is not None and abs(cell.box.y0 - value.y0) < 0.005
+
+
+def test_long_text_block_with_a_slip_is_still_located(tmp_path):
+    pdf = tmp_path / "t.pdf"
+    pdf.write_bytes(make_pdf([[(50, 700, "Please note that this invoice counts as accepted"),
+                               (50, 686, "unless you object within eight weeks of receipt.")]]))
+    text = "Please note that this invoice counts as accepted unless you objct within eight weeks of receipt."
+    item = item_of(kind="text", text=text, source_text=text, end_text="within eight weeks of receipt.", page=1)
+    cell = cell_from_item(pdf, item, "text", "text", locate_boxes=True)
+    assert cell.box is not None and cell.box.y1 >= locate(pdf, "of receipt.").y1

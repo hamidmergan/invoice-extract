@@ -1,11 +1,11 @@
 """Turn one item of a model answer into a Cell: normalized value, source text and box."""
 
 from pathlib import Path
-from typing import Union
+from typing import List, Optional, Union
 
 from .normalize import display_variants, normalize
 from .pdf import locate, locate_span
-from .results import Cell, Check
+from .results import Box, Cell, Check
 
 PathLike = Union[str, Path]
 
@@ -16,6 +16,25 @@ def _empty(item: dict) -> bool:
     if item["kind"] == "table":
         return not item["rows"]
     return item["value"] in (None, "")
+
+
+def _words(text: str, first: bool, n: int = 6) -> str:
+    words = text.split()
+    return " ".join(words[:n] if first else words[-n:])
+
+
+def _value_box(path: PathLike, raw: str, variants: List[str], page: Optional[int]) -> Optional[Box]:
+    """The value as printed within its source text; else the value anywhere; else the source text itself.
+
+    Models often name a nearby header or a whole row as source, so the value itself decides where the box goes.
+    """
+    variants = [v for v in variants if v.strip()]
+    for find in (lambda v: locate(path, v, page, inside=raw), lambda v: locate(path, v, page)):
+        for variant in variants:
+            box = find(variant)
+            if box is not None:
+                return box
+    return locate(path, raw, page)
 
 
 def cell_from_item(path: PathLike, item: dict, type: str, source: str, locate_boxes: bool) -> Cell:
@@ -34,15 +53,11 @@ def cell_from_item(path: PathLike, item: dict, type: str, source: str, locate_bo
     cell.page = item["page"]
     if locate_boxes and raw:
         if kind == "value":
-            cell.box = locate(path, raw, item["page"])
-            if cell.box is None and cell.value is not None:
-                # tables print the label apart from the value; then look for the value as printed
-                for variant in display_variants(type, cell.value):
-                    cell.box = locate(path, variant, item["page"])
-                    if cell.box is not None:
-                        break
+            cell.box = _value_box(path, raw, display_variants(type, cell.value), item["page"])
         else:
-            cell.box = locate_span(path, raw, item["end_text"], item["page"])
+            # long blocks are often copied with a slip; their first and last words are enough to find them
+            end = item["end_text"] or (item["text"] if kind == "text" else "")
+            cell.box = locate_span(path, _words(raw, first=True), _words(end, first=False), item["page"])
         if cell.box is None:
             cell.checks.append(Check("source_not_located", "warning", "Source text not found in the PDF"))
         else:

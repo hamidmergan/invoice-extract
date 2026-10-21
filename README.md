@@ -202,7 +202,7 @@ One file is one invoice. A PDF with several invoices in it becomes one row.
 
 ## Limitations
 
-Quality depends on the chosen model. A small model may miss fields, misread poor scans or merge fields that only look alike. Check the rows marked warning or error, and spot-check the rest. A saved template makes later runs more consistent.
+Quality depends on the chosen model. Finding every field asks a lot of a model: on a real two-page invoice, a 7B model (qwen2.5:7b) found about 15 fields, a 30B mixture-of-experts model (qwen3:30b-a3b) found 24 in about the same time. Use a model of 20B or more if you can. A small model may miss fields, misread poor scans or merge fields that only look alike. Check the rows marked warning or error, and spot-check the rest. A saved template makes later runs more consistent.
 
 Boxes on scans come from the vision model and are best effort. Boxes on digital PDFs come from the text layer and are exact.
 

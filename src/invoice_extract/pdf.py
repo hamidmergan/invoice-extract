@@ -144,7 +144,7 @@ def segments(path: PathLike, page: int) -> List[Segment]:
         doc.close()
 
 
-def _locate_on_page(pdf_page, page_no: int, needle: str) -> Optional[Box]:
+def _locate_on_page(pdf_page, page_no: int, needle: str, inside: str = "") -> Optional[Box]:
     w, h = pdf_page.get_size()
     textpage = pdf_page.get_textpage()
     try:
@@ -154,7 +154,13 @@ def _locate_on_page(pdf_page, page_no: int, needle: str) -> Optional[Box]:
             if not ch.isspace():
                 chars.append(ch)
                 indices.append(i)
-        start = "".join(chars).find(needle)
+        text = "".join(chars)
+        if inside:
+            region = text.find(inside)
+            found = text[region:region + len(inside)].find(needle) if region >= 0 else -1
+            start = region + found if found >= 0 else -1
+        else:
+            start = text.find(needle)
         if start < 0:
             return None
         boxes = [textpage.get_charbox(i) for i in indices[start:start + len(needle)]]
@@ -170,9 +176,13 @@ def _locate_on_page(pdf_page, page_no: int, needle: str) -> Optional[Box]:
 
 
 @serialized
-def locate(path: PathLike, source_text: str, page: Optional[int] = None) -> Optional[Box]:
-    """Find `source_text` ignoring whitespace. Searches `page` first, then all pages."""
+def locate(path: PathLike, source_text: str, page: Optional[int] = None, inside: str = "") -> Optional[Box]:
+    """Find `source_text` ignoring whitespace. Searches `page` first, then all pages.
+
+    With `inside`, only an occurrence within that text counts, e.g. a value within the line it was read from.
+    """
     needle = "".join(source_text.split())
+    inside = "".join(inside.split())
     if not needle or not _is_pdf(path):
         return None
     doc = _open_pdf(path)
@@ -182,7 +192,7 @@ def locate(path: PathLike, source_text: str, page: Optional[int] = None) -> Opti
             order.remove(page)
             order.insert(0, page)
         for page_no in order:
-            box = _locate_on_page(doc[page_no - 1], page_no, needle)
+            box = _locate_on_page(doc[page_no - 1], page_no, needle, inside)
             if box is not None:
                 return box
         return None
