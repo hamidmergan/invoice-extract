@@ -10,7 +10,7 @@
 - [x] 3 PDF text, boxes, rendering
 - [x] 4 Type detection, e-invoice XML
 - [x] 5 Normalization, checks
-- [ ] 6 LLM calls, fake server
+- [x] 6 LLM calls, fake server
 - [ ] 7 Pipeline
 - [ ] 8 Export
 - [ ] 9 CLI
