@@ -231,7 +231,11 @@ def create_app(settings: Settings, workdir: Optional[Path] = None,
 
     @app.get("/")
     def index() -> FileResponse:
-        return FileResponse(STATIC / "index.html", media_type="text/html")
+        return FileResponse(STATIC / "einvoice.html", media_type="text/html")
+
+    @app.get("/table")
+    def table_page() -> FileResponse:
+        return FileResponse(STATIC / "table.html", media_type="text/html")
 
     @app.post("/api/files")
     async def upload(files: List[UploadFile] = File(...)) -> Dict[str, Any]:

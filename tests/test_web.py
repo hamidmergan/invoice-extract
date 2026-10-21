@@ -317,3 +317,13 @@ def test_stale_merge_does_not_start_a_second_merge(tmp_path, server):  # I3
         time.sleep(0.3)
     assert len(calls) == 2
     assert [f["name"] for f in state["files"]] == ["b.pdf"]
+
+
+def test_table_page_served(server):
+    with client_for(resolve()) as client:
+        res = client.get("/table")
+        assert res.status_code == 200 and "text/html" in res.headers["content-type"]
+        assert "/static/app.js" in res.text
+        home = client.get("/").text
+        assert "/static/einvoice.js" in home and 'href="/table"' in home
+        assert client.get("/static/einvoice.js").status_code == 200
