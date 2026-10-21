@@ -81,3 +81,13 @@ def test_bad_iban():
 
 def test_due_date_or_terms():
     assert by_field(check(valid_invoice(due_date=None, payment_terms=""), "zugferd")) == {"due_date": "error"}
+
+
+def test_delivery_date_or_period_is_recommended():  # KoSIT: BR-DE-TMP-32
+    import datetime
+    issues = check(valid_invoice(), "xrechnung")
+    assert issues == []  # the fixture has no period; the recommendation only shows as an info-level hint
+    inv = valid_invoice()
+    from invoice_extract.einvoicing.rules import hints
+    assert [i.rule for i in hints(inv)] == ["BR-DE-TMP-32"]
+    assert hints(valid_invoice(delivery_date=datetime.date(2026, 10, 1))) == []

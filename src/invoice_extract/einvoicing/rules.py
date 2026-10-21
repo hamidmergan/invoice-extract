@@ -119,3 +119,11 @@ def first_error(inv: EInvoice, format: str) -> Optional[Issue]:
     found = errors(inv, format)
     return found[0] if found else None
 
+
+def hints(inv: EInvoice) -> List[Issue]:
+    """Recommendations that do not block writing (level "info")."""
+    out = []
+    if inv.delivery_date is None and (inv.period_start is None or inv.period_end is None):
+        out.append(Issue("delivery_date", "info", "BR-DE-TMP-32",
+                         "Recommended: a delivery date or a service period (start and end)."))
+    return out
