@@ -7,22 +7,82 @@ from typing import Any, Dict, List, Optional
 
 import openai
 
-from .columns import RESERVED, Column
+from .columns import KINDS, RESERVED, ROLES, Column
 from .config import PLACEHOLDER_API_KEY, Settings
 from .errors import ModelError
 from .results import Box
 
 FILL_PROMPT = """You extract values from an invoice.
-You get a JSON list of columns (key, label, hint, type) and the invoice text.
+You get a JSON list of columns (key, label, hint, type, kind) and the invoice text.
 Pages in the text start with a marker like <!-- page N -->.
 
 Answer with one JSON object and nothing else. For every column key give
 {"value": ..., "source_text": "...", "page": N}, or null if the value is not printed.
+A column of kind "text" gets {"text": "...", "source_text": "<first words>", "end_text": "<last words>", "page": N};
+a column of kind "table" gets {"rows": [[...], ...], "source_text": "<first row>", "end_text": "<last row>", "page": N}
+with the cells in the order of the column's "columns".
 Rules:
 - Use only values printed in the text. Never guess or calculate.
 - Dates as ISO "YYYY-MM-DD". Amounts as a decimal number with a dot, e.g. 1234.56.
 - source_text is the exact text as printed, copied character by character.
 - page is the number from the nearest <!-- page N --> marker before the value."""
+
+DISCOVER_PROMPT = """You read an invoice and list everything printed on it.
+Pages in the text start with a marker like <!-- page N -->.
+
+Answer with one JSON object and nothing else: {"items": [...]}. Each item is one of
+- a single value: {"label": "...", "kind": "value", "type": "text|date|amount|iban", "role": "...",
+  "value": ..., "source_text": "...", "page": N}
+- a block of text: {"label": "...", "kind": "text", "text": "...", "source_text": "<first words>",
+  "end_text": "<last words>", "page": N}
+- a table: {"label": "...", "kind": "table", "columns": ["...", ...], "rows": [["...", ...], ...],
+  "source_text": "<first row as printed>", "end_text": "<last row as printed>", "page": N}
+Rules:
+- List every value, every paragraph of text and every table. Do not leave anything out.
+- label is a short English name for what the item is, whatever language the invoice is in,
+  e.g. "Invoice No.", "Billing Period", "Payment Note", "Line Items".
+- role says what a value means for bookkeeping. Set it whenever a value is the supplier name ("supplier"),
+  the invoice number ("invoice_no"), the invoice date ("invoice_date"), the due date ("due_date"),
+  the total net amount ("net"), the total VAT amount ("vat"), the total gross amount ("gross"),
+  the currency ("currency") or the supplier's IBAN ("iban"). Each role at most once; otherwise "".
+- Use only what is printed. Never guess or calculate.
+- Dates as ISO "YYYY-MM-DD". Amounts as a decimal number with a dot, e.g. 1234.56.
+- source_text and end_text are exact text as printed, copied character by character.
+- page is the number from the nearest <!-- page N --> marker before the item."""
+
+DISCOVER_EXAMPLE = {"items": [
+    {"label": "Invoice No.", "kind": "value", "type": "text", "role": "invoice_no", "value": "A-1",
+     "source_text": "Invoice A-1", "page": 1},
+    {"label": "Payment Note", "kind": "text", "text": "Please pay within 14 days.", "source_text": "Please pay",
+     "end_text": "14 days.", "page": 1},
+    {"label": "Line Items", "kind": "table", "columns": ["Description", "Amount"], "rows": [["Item", "10.00"]],
+     "source_text": "Item 10.00", "end_text": "Item 10.00", "page": 1},
+]}
+
+MERGE_PROMPT = """You get labels of fields found on several invoices, each with its kind, type and example values,
+and the field names already in use. Map every label to a field name.
+Give two labels the same name only when they mean exactly the same thing on an invoice.
+Prefer a name already in use when it fits. Names are short English names.
+Answer with one JSON object and nothing else: {"mapping": {"<label>": "<field name>"}}."""
+
+COLUMNS_PROMPT = """You get the column names of the same kind of table from several invoices.
+Map every column name to a common English name. Give two names the same name only when they mean the same thing.
+Answer with one JSON object and nothing else: {"mapping": {"<column name>": "<common name>"}}."""
+
+VALUE_TYPES = ("text", "date", "amount", "iban")
+
+# Labels that mean a role, for values the model named but did not mark.
+ROLE_LABELS = {
+    "supplier": ("supplier", "supplier name", "seller", "vendor"),
+    "invoice_no": ("invoice no.", "invoice no", "invoice number", "invoice #"),
+    "invoice_date": ("invoice date", "date of invoice"),
+    "due_date": ("due date", "payment due date", "payment due"),
+    "net": ("net", "net amount", "net total", "total net"),
+    "vat": ("vat", "vat amount", "total vat", "tax", "tax amount"),
+    "gross": ("gross", "gross amount", "total", "total amount", "grand total", "amount due", "total due"),
+    "currency": ("currency",),
+    "iban": ("iban",),
+}
 
 BOX_PROMPT = """You locate printed text on an invoice page image.
 You get a JSON object that maps keys to the text to find.
@@ -77,31 +137,128 @@ def _json_object(text: str) -> dict:
     raise ModelError(f"Model answer is not valid JSON: {error}")
 
 
-def _field(item: Any) -> Optional[dict]:
-    if not isinstance(item, dict):
+def _text(value: Any) -> str:
+    return "" if value is None else value if isinstance(value, str) else str(value)
+
+
+def _rows(rows: Any, columns: List[str]) -> List[Dict[str, str]]:
+    """Rows as dicts over `columns`: short rows are padded, long rows cut, cells turned into strings."""
+    out = []
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict):
+            cells = [row.get(c) for c in columns]
+        elif isinstance(row, list):
+            cells = (row + [None] * len(columns))[:len(columns)]
+        else:
+            continue
+        out.append({c: _text(v) for c, v in zip(columns, cells)})
+    return out
+
+
+def _item(data: Any, kind: Optional[str] = None, columns: Optional[List[str]] = None,
+          label: str = "", type: str = "", role: str = "") -> Optional[dict]:
+    """One item of a model answer in a fixed shape, or None if it is unusable."""
+    if not isinstance(data, dict):
         return None
-    page = item.get("page")
+    kind = kind or data.get("kind")
+    if kind not in KINDS:
+        return None
+    if not columns:
+        raw = data.get("columns")
+        columns = [_text(c) for c in raw if c is not None] if isinstance(raw, list) else []
+    page = data.get("page")
     if isinstance(page, bool) or not isinstance(page, int):
         page = None
-    source = item.get("source_text")
+    type_ = type or (data.get("type") if data.get("type") in VALUE_TYPES else "text")
+    role = role or (data.get("role") if data.get("role") in ROLES else "")
     return {
-        "value": item.get("value"),
-        "source_text": source if isinstance(source, str) else "",
+        "label": label or _text(data.get("label")).strip(),
+        "kind": kind,
+        "type": type_,
+        "role": role,
+        "value": data.get("value") if kind == "value" else None,
+        "text": _text(data.get("text")) if kind == "text" else "",
+        "columns": columns if kind == "table" else [],
+        "rows": _rows(data.get("rows"), columns) if kind == "table" else [],
+        "source_text": _text(data.get("source_text")),
+        "end_text": _text(data.get("end_text")),
         "page": page,
     }
+
+
+def _skeleton(col: Column) -> dict:
+    if col.kind == "text":
+        return {"text": None, "source_text": "", "end_text": "", "page": None}
+    if col.kind == "table":
+        return {"rows": [], "source_text": "", "end_text": "", "page": None}
+    return {"value": None, "source_text": "", "page": None}
 
 
 def fill_columns(client: openai.OpenAI, model: str, columns: List[Column], text: str) -> Dict[str, Optional[dict]]:
     """Ask the model for every non-reserved column. Missing keys become None."""
     wanted = [c for c in columns if c.key not in RESERVED]
-    spec = [{"key": c.key, "label": c.label, "hint": c.hint, "type": c.type} for c in wanted]
-    skeleton = {c.key: {"value": None, "source_text": "", "page": None} for c in wanted}
+    spec = [{"key": c.key, "label": c.label, "hint": c.hint, "type": c.type, "kind": c.kind}
+            for c in wanted]
+    for entry, col in zip(spec, wanted):
+        if col.kind == "table":
+            entry["columns"] = col.table_columns
+    skeleton = {c.key: _skeleton(c) for c in wanted}
     user = ("Columns:\n" + json.dumps(spec, ensure_ascii=False)
             + "\n\nFill in this object and answer with it. Keep every key; a value that is not printed stays null.\n"
             + "Answer skeleton:\n" + json.dumps(skeleton, ensure_ascii=False)
             + "\n\nInvoice text:\n" + text)
     data = _json_object(_chat(client, model, FILL_PROMPT, user))
-    return {c.key: _field(data.get(c.key)) for c in wanted}
+    return {c.key: _item(data.get(c.key), c.kind, c.table_columns, c.label, c.type if c.kind == "value" else "",
+                         c.role) for c in wanted}
+
+
+def discover_items(client: openai.OpenAI, model: str, text: str) -> List[dict]:
+    """Ask the model for every value, text block and table on the invoice."""
+    user = ("Answer in this shape (an example, not this invoice):\n" + json.dumps(DISCOVER_EXAMPLE, ensure_ascii=False)
+            + "\n\nInvoice text:\n" + text)
+    data = _json_object(_chat(client, model, DISCOVER_PROMPT, user))
+    items = data.get("items")
+    if not isinstance(items, list):
+        raise ModelError("Model answer has no list of items.")
+    found = [item for item in (_item(raw) for raw in items) if item is not None and item["label"]]
+    _infer_roles(found)
+    return found
+
+
+def _infer_roles(items: List[dict]) -> None:
+    """Give unmarked values the role their label names, unless another item already has that role."""
+    taken = {item["role"] for item in items if item["role"]}
+    for item in items:
+        if item["role"] or item["kind"] != "value":
+            continue
+        label = item["label"].strip().lower()
+        for role, labels in ROLE_LABELS.items():
+            if role not in taken and label in labels:
+                item["role"] = role
+                taken.add(role)
+                break
+
+
+def _mapping(client: openai.OpenAI, model: str, prompt: str, payload: Any, names: List[str]) -> Dict[str, str]:
+    data = _json_object(_chat(client, model, prompt, json.dumps(payload, ensure_ascii=False)))
+    mapping = data.get("mapping")
+    mapping = mapping if isinstance(mapping, dict) else {}
+    out = {}
+    for name in names:
+        target = mapping.get(name)
+        out[name] = target.strip() if isinstance(target, str) and target.strip() else name
+    return out
+
+
+def merge_labels(client: openai.OpenAI, model: str, labels: List[dict], known: List[str]) -> Dict[str, str]:
+    """Map labels from several invoices to common field names. Unanswered labels map to themselves."""
+    return _mapping(client, model, MERGE_PROMPT, {"labels": labels, "known": list(known)},
+                    [entry["label"] for entry in labels])
+
+
+def merge_table_columns(client: openai.OpenAI, model: str, names: List[str]) -> Dict[str, str]:
+    """Map table column names from several invoices to common names."""
+    return _mapping(client, model, COLUMNS_PROMPT, {"columns": list(names)}, list(names))
 
 
 def _valid_box(coords: Any) -> bool:
