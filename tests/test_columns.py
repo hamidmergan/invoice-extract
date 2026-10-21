@@ -57,3 +57,30 @@ def test_template_rejects_unknown_type():
 def test_template_rejects_missing_label():
     with pytest.raises(ConfigError, match="label"):
         Template.loads("name: x\ncolumns:\n  - {key: a}\n")
+
+
+def test_v1_template_loads_as_values():
+    t = Template.loads("name: t\ncolumns:\n  - label: Order No.\n")
+    col = t.columns[0]
+    assert col.kind == "value" and col.role == "" and col.table_columns == []
+
+
+def test_template_v2_roundtrip():
+    cols = [Column("net", "Net", type="amount", role="net"),
+            Column("payment_note", "Payment Note", kind="text"),
+            Column("line_items", "Line Items", kind="table", table_columns=["Description", "Amount"])]
+    assert Template.loads(Template("t", cols).dumps()).columns == cols
+
+
+def test_template_rejects_unknown_kind_and_role():
+    with pytest.raises(ConfigError, match="kind"):
+        Template.loads("columns:\n  - label: X\n    kind: picture\n")
+    with pytest.raises(ConfigError, match="role"):
+        Template.loads("columns:\n  - label: X\n    role: boss\n")
+
+
+def test_export_columns_and_role_column():
+    from invoice_extract.columns import export_columns, role_column
+    gross = role_column("gross")
+    assert gross.label == "Gross" and gross.type == "amount" and gross.role == "gross"
+    assert [c.key for c in export_columns([gross])] == ["file", "gross", "status"]

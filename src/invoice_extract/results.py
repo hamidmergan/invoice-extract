@@ -35,6 +35,11 @@ class Cell:
     source: str = ""
     edited: bool = False
     checks: List[Check] = field(default_factory=list)
+    kind: str = "value"  # "value", "text" (value is the whole text) or "table" (value is a list of row dicts)
+    label: str = ""  # the name the model gave this item on this invoice
+    role: str = ""
+    type: str = "text"
+    columns: List[str] = field(default_factory=list)  # table column names, in order
 
 
 @dataclass
@@ -79,6 +84,11 @@ def _cell(cell: Cell) -> Dict[str, Any]:
         "source": cell.source,
         "edited": cell.edited,
         "checks": [_check(c) for c in cell.checks],
+        "kind": cell.kind,
+        "label": cell.label,
+        "role": cell.role,
+        "type": cell.type,
+        "columns": list(cell.columns),
     }
 
 

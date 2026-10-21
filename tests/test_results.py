@@ -46,3 +46,11 @@ def test_defaults_not_shared():
     a.cells["k"] = Cell()
     assert b.checks == [] and b.cells == {}
     assert Cell().checks is not Cell().checks
+
+
+def test_table_cell_to_dict():
+    row = Row("a.pdf", cells={"line_items": Cell(kind="table", label="Line Items", columns=["Description"],
+                                                 value=[{"Description": "Paper"}])})
+    cell = row.to_dict()["cells"]["line_items"]
+    assert cell["kind"] == "table" and cell["label"] == "Line Items"
+    assert cell["columns"] == ["Description"] and cell["value"] == [{"Description": "Paper"}]
