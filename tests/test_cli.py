@@ -42,6 +42,7 @@ def test_cli_exit_code_on_error(tmp_path, server, capsys):
     broken = tmp_path / "broken.pdf"
     broken.write_bytes(b"%PDF-1.4 not really a pdf")
     out = tmp_path / "out.csv"
+    server.reply = lambda body: '{"items": []}'
     assert main([str(good), str(broken), "-o", str(out)] + llm_flags(server)) == 1
     assert out.exists()
     err = capsys.readouterr().err
@@ -103,3 +104,16 @@ def test_cli_serve_guards_host_on_loopback(monkeypatch):
     client = TestClient(started["app"], base_url="http://127.0.0.1:8000")
     assert client.get("/api/state").status_code == 200
     assert client.get("/api/state", headers={"Host": "evil.example"}).status_code == 400
+
+
+def test_cli_discovery_default(tmp_path, server, capsys):
+    pdf = write_samples(tmp_path)[0]
+    server.reply = lambda body: json.dumps({"items": [
+        {"label": "Invoice No.", "kind": "value", "role": "invoice_no", "value": "RE-2026-001",
+         "source_text": "Invoice RE-2026-001", "page": 1},
+        {"label": "Customer No.", "kind": "value", "value": "K-1", "source_text": "K-1", "page": 1}]})
+    out = tmp_path / "out.xlsx"
+    assert main([str(pdf), "-o", str(out)] + llm_flags(server)) == 0, capsys.readouterr().err
+    ws = openpyxl.load_workbook(out)["Invoices"]
+    assert [c.value for c in ws[1]] == ["File", "Invoice No.", "Customer No.", "Status"]
+    assert "Found 2 fields" in capsys.readouterr().err

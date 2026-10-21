@@ -192,3 +192,10 @@ def test_with_hints():
     assert hinted[1].hint == "Columns: A, B."
     assert hinted[2].hint == "keep me"
     assert fields[0].hint == ""
+
+
+def test_einvoice_keeps_xml_when_discovery_fails(tmp_path, server):
+    server.reply = lambda body: "{}"
+    row = run(write_samples(tmp_path)[2], llm_settings(server))
+    assert row.error is None and row.cells["gross"].value == Decimal("119.00")
+    assert [c.name for c in row.checks if c.level != "ok"] == ["discovery_failed"]

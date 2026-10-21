@@ -84,8 +84,17 @@ def discover_file(path: PathLike, settings: Settings, client: ClientGetter) -> R
     else:
         settings.require_llm()
         text = _transcribe(path, settings)
-    found = [cell_from_item(path, item, item["type"], SOURCE[kind], kind in ("pdf", "zugferd"))
-             for item in discover_items(client(), settings.model, text)]
+    try:
+        items = discover_items(client(), settings.model, text)
+    except InvoiceError as e:
+        if kind not in ("xml", "zugferd"):
+            raise
+        # the exact XML values stay; only the extra fields are missing
+        row.cells = cells
+        row.checks = [Check("discovery_failed", "warning", f"Extra fields could not be read: {e}")]
+        row.checks += run_checks(row, [])
+        return row
+    found = [cell_from_item(path, item, item["type"], SOURCE[kind], kind in ("pdf", "zugferd")) for item in items]
     found = [c for c in found if c.value not in (None, "", [])]
     _keyed(found, cells, row)
     if kind == "scan":
