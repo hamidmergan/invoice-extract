@@ -6,7 +6,7 @@
 ## Progress
 
 - [x] 1 Scaffold, errors, config
-- [ ] 2 Columns, templates, result types
+- [x] 2 Columns, templates, result types
 - [ ] 3 PDF text, boxes, rendering
 - [ ] 4 Type detection, e-invoice XML
 - [ ] 5 Normalization, checks
