@@ -1,9 +1,12 @@
+import subprocess
+import sys
+
 import pytest
 from PIL import Image
 
 from invoice_extract.pdf import click_hint, locate, page_count, render_page, segments, text_pages
 
-from pdfgen import make_pdf
+from pdfgen import make_pdf, write_samples
 
 
 @pytest.fixture
@@ -56,3 +59,28 @@ def test_image_has_no_text(tmp_path):
     Image.new("RGB", (100, 100), "white").save(path)
     assert text_pages(path) == []
     assert page_count(path) == 1
+
+
+STRESS = """
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from invoice_extract.detect import embedded_xml
+from invoice_extract.pdf import locate, page_count, render_page, segments, text_pages
+paths = [Path(p) for p in sys.argv[1:]] * 10
+def work(p):
+    for _ in range(3):
+        page_count(p); render_page(p, 1); segments(p, 1); text_pages(p); locate(p, "ACME"); embedded_xml(p)
+    return 1
+with ThreadPoolExecutor(8) as pool:
+    print(sum(pool.map(work, paths)))
+"""
+
+
+def test_pdf_helpers_are_thread_safe(tmp_path):
+    # pdfium is not thread-safe; parallel use from the batch pool or the web UI must not crash the process
+    paths = write_samples(tmp_path)[:2]
+    proc = subprocess.run([sys.executable, "-c", STRESS] + [str(p) for p in paths], capture_output=True, text=True,
+                          timeout=120)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert proc.stdout.strip() == "20"

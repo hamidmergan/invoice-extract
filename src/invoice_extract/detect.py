@@ -5,13 +5,14 @@ from typing import Optional
 
 from .config import Settings
 from .errors import LimitError, UnsupportedFileError
-from .pdf import PathLike, _is_pdf, _open_pdf, text_pages
+from .pdf import PathLike, _is_pdf, _open_pdf, serialized, text_pages
 
 SUFFIXES = {".pdf", ".xml", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 EMBEDDED_NAMES = {"factur-x.xml", "zugferd-invoice.xml", "xrechnung.xml", "zugferd.xml"}
 MIN_CHARS_PER_PAGE = 30
 
 
+@serialized
 def embedded_xml(path: PathLike) -> Optional[bytes]:
     """The e-invoice XML attached to a ZUGFeRD/Factur-X PDF, or None."""
     if not _is_pdf(path):

@@ -1,5 +1,6 @@
 """The pipeline: detect the file kind, fill the columns, locate the sources, run the checks."""
 
+import contextlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Union
@@ -15,7 +16,7 @@ from .einvoice import CII_PATHS, UBL_PATHS, parse_xml, xml_text
 from .errors import LimitError, ModelError
 from .llm import fill_columns, make_client, vision_boxes
 from .normalize import display_variants, normalize
-from .pdf import locate, page_count, render_page, text_pages
+from .pdf import PDFIUM_LOCK, _is_pdf, locate, page_count, render_page, text_pages
 from .results import Cell, Check, Row
 
 PathLike = Union[str, Path]
@@ -104,17 +105,20 @@ def _xml_cells(path: PathLike, kind: str, columns: List[Column], settings: Setti
 
 
 def _transcribe(path: PathLike, settings: Settings) -> str:
+    # doc_extract renders scanned PDFs with pdfium too, so it shares the lock; images run in parallel
+    guard = PDFIUM_LOCK if _is_pdf(path) else contextlib.nullcontext()
     try:
-        return doc_extract.extract(
-            path,
-            base_url=settings.base_url,
-            model=settings.vision(),
-            api_key=settings.api_key,
-            timeout=settings.timeout,
-            max_retries=settings.max_retries,
-            max_pages=settings.max_pages,
-            max_file_mb=settings.max_file_mb,
-        )
+        with guard:
+            return doc_extract.extract(
+                path,
+                base_url=settings.base_url,
+                model=settings.vision(),
+                api_key=settings.api_key,
+                timeout=settings.timeout,
+                max_retries=settings.max_retries,
+                max_pages=settings.max_pages,
+                max_file_mb=settings.max_file_mb,
+            )
     except doc_extract.ExtractError as e:
         message = str(e)
         if any(word in message.lower() for word in _VISION_WORDS):

@@ -1,9 +1,11 @@
 """Read text, find values and render pages of PDFs and images."""
 
+import functools
 import io
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, TypeVar, Union
 
 import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_c
@@ -21,6 +23,20 @@ class Segment:
 
     text: str
     box: Box
+
+
+# pdfium is not thread-safe: every call into it runs under this lock.
+PDFIUM_LOCK = threading.RLock()
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def serialized(fn: F) -> F:
+    """Run `fn` under PDFIUM_LOCK."""
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        with PDFIUM_LOCK:
+            return fn(*args, **kwargs)
+    return wrapper  # type: ignore[return-value]
 
 
 def _is_pdf(path: PathLike) -> bool:
@@ -55,6 +71,7 @@ def _check_page(page: int, count: int) -> None:
         raise ValueError(f"Page {page} does not exist; the file has {count} page(s).")
 
 
+@serialized
 def page_count(path: PathLike) -> int:
     if _is_pdf(path):
         doc = _open_pdf(path)
@@ -66,6 +83,7 @@ def page_count(path: PathLike) -> int:
         return getattr(img, "n_frames", 1)
 
 
+@serialized
 def render_page(path: PathLike, page: int, scale: float = 1.5) -> bytes:
     """Render a 1-based page as PNG."""
     out = io.BytesIO()
@@ -86,6 +104,7 @@ def render_page(path: PathLike, page: int, scale: float = 1.5) -> bytes:
     return out.getvalue()
 
 
+@serialized
 def text_pages(path: PathLike) -> List[str]:
     """The text layer of each page. Images have none."""
     if not _is_pdf(path):
@@ -102,6 +121,7 @@ def text_pages(path: PathLike) -> List[str]:
         doc.close()
 
 
+@serialized
 def segments(path: PathLike, page: int) -> List[Segment]:
     """Text runs of a 1-based page with normalized boxes."""
     if not _is_pdf(path):
@@ -149,6 +169,7 @@ def _locate_on_page(pdf_page, page_no: int, needle: str) -> Optional[Box]:
         textpage.close()
 
 
+@serialized
 def locate(path: PathLike, source_text: str, page: Optional[int] = None) -> Optional[Box]:
     """Find `source_text` ignoring whitespace. Searches `page` first, then all pages."""
     needle = "".join(source_text.split())
