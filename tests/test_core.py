@@ -74,7 +74,7 @@ def test_pdf_flow_values_and_boxes(tmp_path, server):
 
 def test_pdf_source_not_located_warning(tmp_path, server):
     paths = write_samples(tmp_path)
-    server.reply = lambda body: json.dumps({"invoice_no": {"value": "RE-2026-001", "source_text": "NOPE", "page": 1}})
+    server.reply = lambda body: json.dumps({"invoice_no": {"value": "XX-999", "source_text": "NOPE", "page": 1}})
     row = extract(paths[0], **llm(server))
     cell = row.cells["invoice_no"]
     assert cell.box is None
@@ -166,3 +166,16 @@ def test_add_columns_does_not_duplicate_required_checks(tmp_path, server):
     row = extract(xml, cols, base_url=server.base_url, model="m")
     row = add_columns(row, cols, base_url=server.base_url, model="m")
     assert [c.message for c in row.checks].count("Missing: Order No.") == 1
+
+
+def test_pdf_box_falls_back_to_the_value_in_tables(tmp_path, server):
+    # tables print the label above the value, so the model's "label value" source text is not on the page
+    from pdfgen import make_pdf
+    pdf = tmp_path / "table.pdf"
+    pdf.write_bytes(make_pdf([[(50, 780, "ACME GmbH Invoice RE-7"), (50, 700, "Nettobetrag"), (300, 700, "USt-Betrag"),
+                               (50, 680, "100,00 EUR"), (300, 680, "19,00 EUR")]]))
+    server.reply = lambda body: json.dumps({"net": {"value": 100.0, "source_text": "Nettobetrag 100,00 EUR", "page": 1}})
+    row = extract(pdf, **llm(server))
+    cell = row.cells["net"]
+    assert cell.box is not None and cell.box.page == 1
+    assert cell.checks == []

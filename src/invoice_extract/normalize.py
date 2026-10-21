@@ -38,7 +38,7 @@ def _iso_date(value: Any) -> Optional[datetime.date]:
         return None
 
 
-def _raw_dates(raw: str) -> List[datetime.date]:
+def _raw_dates(raw: str, value: Optional[datetime.date] = None) -> List[datetime.date]:
     found = []
     for fmt in DATE_FORMATS:
         try:
@@ -60,34 +60,42 @@ def _decimal(value: Any) -> Optional[Decimal]:
     return number if number.is_finite() else None
 
 
-def _raw_amounts(raw: str) -> List[Decimal]:
-    """All plausible readings of an amount as printed, e.g. "1.234" gives two."""
-    text = re.sub(r"[^0-9,.\-]", "", raw)
-    negative = text.startswith("-") or text.endswith("-")
-    text = text.replace("-", "")
-    if not re.search(r"\d", text):
-        return []
-    if "," in text and "." in text:
-        dec = max(text.rfind(","), text.rfind("."))
-        readings = [text[:dec].replace(",", "").replace(".", "") + "." + text[dec + 1:]]
-    elif "," in text or "." in text:
-        sep = "," if "," in text else "."
-        parts = text.split(sep)
+# A number as printed, with an optional minus in front or behind; a hyphen inside a word ("Netto-Betrag") is no minus.
+_NUMBER = re.compile(r"(?<![\w-])(-\s?)?(\d(?:[\d.,]*\d)?)(-(?!\w))?")
+
+
+def _readings(digits: str) -> List[str]:
+    """Plausible readings of one printed number, e.g. "1.234" gives two."""
+    if "," in digits and "." in digits:
+        dec = max(digits.rfind(","), digits.rfind("."))
+        return [digits[:dec].replace(",", "").replace(".", "") + "." + digits[dec + 1:]]
+    if "," in digits or "." in digits:
+        sep = "," if "," in digits else "."
+        parts = digits.split(sep)
         if len(parts) > 2:
-            readings = ["".join(parts)]
-        elif len(parts[1]) == 3:
-            readings = ["".join(parts), parts[0] + "." + parts[1]]
-        else:
-            readings = [parts[0] + "." + parts[1]]
-    else:
-        readings = [text]
-    numbers = [_decimal(("-" if negative else "") + r) for r in readings]
-    return _unique([n for n in numbers if n is not None])
+            return ["".join(parts)]
+        if len(parts[1]) == 3:
+            return ["".join(parts), parts[0] + "." + parts[1]]
+        return [parts[0] + "." + parts[1]]
+    return [digits]
+
+
+def _raw_amounts(raw: str, value: Optional[Decimal] = None) -> List[Decimal]:
+    """Readings of the amount printed in `raw`. With several numbers, those of the one that matches `value`."""
+    numbers = []
+    for match in _NUMBER.finditer(raw):
+        sign = "-" if match.group(1) or match.group(3) else ""
+        readings = _unique([d for d in (_decimal(sign + r) for r in _readings(match.group(2))) if d is not None])
+        if value is not None and value in readings:
+            return readings
+        if readings:
+            numbers.append(readings)
+    return _unique([n for readings in numbers for n in readings])
 
 
 def _compare(kind: str, value: Any, candidates: list, raw: str) -> List[Check]:
     checks = []
-    if len(candidates) > 1:
+    if len(candidates) > 1 and value in candidates:
         name = "date_ambiguous" if kind == "date" else "amount_ambiguous"
         checks.append(Check(name, "warning", f'"{raw.strip()}" can be read in more than one way'))
     if candidates and value not in candidates:
@@ -98,17 +106,19 @@ def _compare(kind: str, value: Any, candidates: list, raw: str) -> List[Check]:
 def _typed(kind: str, value: Any, raw: Optional[str]) -> Tuple[Any, List[Check]]:
     parse, from_raw = (_iso_date, _raw_dates) if kind == "date" else (_decimal, _raw_amounts)
     raw = raw or ""
-    candidates = from_raw(raw) if raw.strip() else []
     parsed = parse(value)
     if parsed is None and isinstance(value, str):
         # The LLM may hand back the printed form, e.g. "21.10.2026" or "1.234,50".
         own = from_raw(value)
         if own:
             parsed = own[0]
-    if parsed is None and candidates:
-        parsed = candidates[0]
+    if parsed is None and raw.strip():
+        found = from_raw(raw)
+        if found:
+            parsed = found[0]
     if parsed is None:
         return value, [Check("unparsed", "warning", f'Could not read "{value}" as {"a date" if kind == "date" else "an amount"}')]
+    candidates = from_raw(raw, parsed) if raw.strip() else []
     return parsed, _compare(kind, parsed, candidates, raw)
 
 

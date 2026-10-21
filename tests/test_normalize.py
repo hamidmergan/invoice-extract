@@ -106,3 +106,20 @@ def test_display_variants_date_and_text():
         "10/21/2026",
     ]
     assert display_variants("text", "ACME") == ["ACME"]
+
+
+def test_amount_hyphen_in_label_is_not_a_minus():
+    value, checks = normalize("amount", "10.0756", "Nettorechnungs-Betrag 10,0756 EUR")
+    assert value == Decimal("10.0756")
+    assert checks == []
+
+
+def test_amount_raw_with_several_numbers():
+    value, checks = normalize("amount", "10.0756", "19 % 10,0756 EUR")
+    assert value == Decimal("10.0756")
+    assert checks == []
+
+
+def test_amount_negative_forms():
+    assert normalize("amount", "-5.00", "Gutschrift -5,00 EUR") == (Decimal("-5.00"), [])
+    assert normalize("amount", "-100.00", "100,00-") == (Decimal("-100.00"), [])

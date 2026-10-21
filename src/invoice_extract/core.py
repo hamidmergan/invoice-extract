@@ -65,6 +65,12 @@ def _llm_cells(path: PathLike, columns: List[Column], text: str, source: str, cl
         cell = Cell(value=value, raw=source_text, page=item["page"], source=source, checks=checks)
         if locate_boxes and source_text:
             cell.box = locate(path, source_text, item["page"])
+            if cell.box is None and value is not None:
+                # tables print the label apart from the value; then look for the value as printed
+                for variant in display_variants(col.type, value):
+                    cell.box = locate(path, variant, item["page"])
+                    if cell.box is not None:
+                        break
             if cell.box is None:
                 cell.checks.append(Check("source_not_located", "warning", "Source text not found in the PDF"))
             else:
