@@ -1,7 +1,7 @@
 import json
 import os
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, List
 
 import pytest
@@ -55,7 +55,7 @@ class FakeServer:
                 self.end_headers()
                 self.wfile.write(data)
 
-        self.httpd = HTTPServer(("127.0.0.1", 0), Handler)
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)  # requests run in parallel, like a real server
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
 

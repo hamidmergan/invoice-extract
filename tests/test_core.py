@@ -224,3 +224,15 @@ def test_template_mode_text_and_table(tmp_path, server):
     row = extract_many([pdf], cols, **llm(server))[0]
     assert row.cells["note"].kind == "text" and row.cells["note"].value == "Thank you."
     assert row.cells["lines"].value == [{"Description": "Paper", "Amount": "100,00"}]
+
+
+def test_einvoice_template_with_line_items_needs_no_model(tmp_path, server):
+    from invoice_extract import Column
+    from invoice_extract.einvoice import LINE_COLUMNS
+    xml = write_samples(tmp_path)[2]
+    cols = [Column("gross", "Gross", type="amount", role="gross"),
+            Column("line_items", "Line Items", kind="table", table_columns=list(LINE_COLUMNS))]
+    row = extract_many([xml], cols)[0]
+    assert row.error is None and row.status == "ok"
+    assert row.cells["line_items"].value[0]["Description"] == "Paper" and row.cells["line_items"].source == "xml"
+    assert server.requests == []

@@ -187,13 +187,14 @@ def create_app(settings: Settings, workdir: Optional[Path] = None,
             for row in rows:
                 row.checks.append(Check("merge_failed", "warning", "Fields could not be merged across invoices"))
         with lock:
+            if generation != ws.generation:
+                return  # the files were cleared or re-read meanwhile; a newer merge owns the workspace
             ws.merging = False
-            if generation == ws.generation:
-                before = {c.key for c in ws.fields}
-                ws.fields = fields_of(finished_rows() + rows, known=ws.fields)
-                ws.selected |= {c.key for c in ws.fields if c.key not in before}
-                for entry in batch:
-                    entry.state = "done"
+            before = {c.key for c in ws.fields}
+            ws.fields = fields_of(finished_rows() + rows, known=ws.fields)
+            ws.selected |= {c.key for c in ws.fields if c.key not in before}
+            for entry in batch:
+                entry.state = "done"
             start_merge()
 
     def rerun_all() -> None:

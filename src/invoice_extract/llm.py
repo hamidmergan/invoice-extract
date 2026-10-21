@@ -155,6 +155,26 @@ def _rows(rows: Any, columns: List[str]) -> List[Dict[str, str]]:
     return out
 
 
+def _column_names(names: List[str], rows: Any) -> List[str]:
+    """Unique, non-empty table column names; missing names come from the rows ("Column 2", dict keys)."""
+    rows = rows if isinstance(rows, list) else []
+    names = list(names)
+    if not names:
+        names = [""] * max([len(r) for r in rows if isinstance(r, list)] + [0])
+    if not any(names):
+        for row in rows:
+            if isinstance(row, dict):
+                names.extend(_text(k) for k in row if _text(k) not in names)
+    out: List[str] = []
+    for i, name in enumerate(names, 1):
+        base = name.strip() or f"Column {i}"
+        unique, n = base, 2
+        while unique in out:
+            unique, n = f"{base} ({n})", n + 1
+        out.append(unique)
+    return out
+
+
 def _item(data: Any, kind: Optional[str] = None, columns: Optional[List[str]] = None,
           label: str = "", type: str = "", role: str = "") -> Optional[dict]:
     """One item of a model answer in a fixed shape, or None if it is unusable."""
@@ -165,7 +185,7 @@ def _item(data: Any, kind: Optional[str] = None, columns: Optional[List[str]] = 
         return None
     if not columns:
         raw = data.get("columns")
-        columns = [_text(c) for c in raw if c is not None] if isinstance(raw, list) else []
+        columns = _column_names([_text(c) for c in raw] if isinstance(raw, list) else [], data.get("rows"))
     page = data.get("page")
     if isinstance(page, bool) or not isinstance(page, int):
         page = None

@@ -13,7 +13,7 @@ from .checks import run_checks
 from .columns import RESERVED, STANDARD_COLUMNS, Column
 from .config import Settings, resolve
 from .detect import detect, embedded_xml
-from .einvoice import CII_PATHS, UBL_PATHS, parse_xml, xml_text
+from .einvoice import CII_PATHS, LINE_COLUMNS, UBL_PATHS, parse_line_items, parse_xml, xml_text
 from .errors import LimitError, ModelError
 from .llm import fill_columns, make_client, vision_boxes
 from .normalize import display_variants, normalize
@@ -71,6 +71,11 @@ def _xml_cells(path: PathLike, kind: str, columns: List[Column], settings: Setti
     parsed = parse_xml(data)
     cells = {}
     for col in columns:
+        if col.kind == "table" and (col.key == "line_items" or col.label.strip().lower() == "line items"):
+            names = col.table_columns or list(LINE_COLUMNS)
+            lines = [{n: line.get(n, "") for n in names} for line in parse_line_items(data)]
+            cells[col.key] = Cell(value=lines or None, source="xml", kind="table", label=col.label, columns=names)
+    for col in columns:
         if col.key not in XML_KEYS:
             continue
         raw = parsed.get(col.key, "")
@@ -87,7 +92,7 @@ def _xml_cells(path: PathLike, kind: str, columns: List[Column], settings: Setti
                     break
         cells[col.key] = cell
 
-    rest = [c for c in columns if c.key not in XML_KEYS]
+    rest = [c for c in columns if c.key not in XML_KEYS and c.key not in cells]
     if rest:
         text = xml_text(data)
         if kind == "zugferd":

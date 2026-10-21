@@ -134,7 +134,9 @@ def _table(rows: List[Row], column: Column) -> Tuple[List[str], List[List[Any]]]
 
 def _sheet_title(label: str, used: Set[str]) -> str:
     """A valid, unused Excel sheet name: no []:*?/\\, at most 31 characters."""
-    base = re.sub(r"[\[\]:*?/\\]", "", label).strip() or "Table"
+    base = ILLEGAL_CHARACTERS_RE.sub("", re.sub(r"[\[\]:*?/\\]", "", label)).strip().strip("'").strip()
+    if not base or base.lower() == "history":  # Excel reserves "History"
+        base = (base + " table").strip() or "Table"
     base = base[:31]
     title, n = base, 2
     while title.lower() in {u.lower() for u in used}:

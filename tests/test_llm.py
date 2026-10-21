@@ -208,3 +208,16 @@ def test_discover_items_infers_roles_from_labels(server):
     ]})
     items = discover_items(client_for(server), "m", TEXT)
     assert [i["role"] for i in items] == ["", "gross", "iban", "net", ""]
+
+
+def test_discover_table_column_names_made_unique(server):  # I5a, M2
+    server.reply = lambda body: json.dumps({"items": [
+        {"label": "T", "kind": "table", "columns": ["Description", "", "", "Amount"],
+         "rows": [["Paper", "2", "pcs", "10.00"]]},
+        {"label": "U", "kind": "table", "columns": ["Amount", "Amount"], "rows": [["1", "2"]]},
+        {"label": "V", "kind": "table", "rows": [["a", "b"], ["c"]]}]})
+    t, u, v = discover_items(client_for(server), "m", TEXT)
+    assert t["columns"] == ["Description", "Column 2", "Column 3", "Amount"]
+    assert t["rows"] == [{"Description": "Paper", "Column 2": "2", "Column 3": "pcs", "Amount": "10.00"}]
+    assert u["columns"] == ["Amount", "Amount (2)"] and u["rows"] == [{"Amount": "1", "Amount (2)": "2"}]
+    assert v["columns"] == ["Column 1", "Column 2"] and v["rows"][1] == {"Column 1": "c", "Column 2": ""}

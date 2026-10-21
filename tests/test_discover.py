@@ -221,3 +221,52 @@ def test_merge_keeps_label_when_model_answers_a_key(server):
     server.reply = mapping({"Line Items": "line_items"})
     merge([a], llm_settings(server))
     assert list(a.cells) == ["line_items"] and a.cells["line_items"].label == "Line Items"
+
+
+def test_label_key_never_takes_a_role_key(tmp_path, server):
+    server.reply = items(
+        {"label": "Gross", "kind": "value", "type": "amount", "value": "100.00"},
+        {"label": "Total", "kind": "value", "type": "amount", "role": "gross", "value": "119.00"})
+    row = run(write_samples(tmp_path)[0], llm_settings(server))
+    assert row.cells["gross"].value == Decimal("119.00") and row.cells["gross"].role == "gross"
+    assert any(c.value == Decimal("100.00") and c.role == "" for c in row.cells.values())
+
+
+def test_role_conflict_runs_no_check_on_one_of_them(tmp_path, server):
+    server.reply = items(
+        {"label": "VAT", "kind": "value", "type": "amount", "role": "vat", "value": "7.00"},
+        {"label": "VAT", "kind": "value", "type": "amount", "role": "vat", "value": "19.00"},
+        {"label": "Net", "kind": "value", "type": "amount", "role": "net", "value": "100.00"},
+        {"label": "Gross", "kind": "value", "type": "amount", "role": "gross", "value": "126.00"})
+    row = run(write_samples(tmp_path)[0], llm_settings(server))
+    assert "vat" not in row.cells
+    assert sorted(str(c.value) for c in row.cells.values() if c.label == "VAT") == ["19.00", "7.00"]
+    assert "totals" not in [c.name for c in row.checks]
+
+
+def test_status_label_is_kept(tmp_path, server):  # M1
+    server.reply = items({"label": "Status", "kind": "value", "value": "Paid"},
+                         {"label": "File", "kind": "value", "value": "A-7"})
+    row = run(write_samples(tmp_path)[0], llm_settings(server))
+    assert [f.label for f in fields_of([row])] == ["Status", "File"]
+
+
+def test_merge_chain_never_overwrites(server):  # I4
+    a = make_row("a.pdf", order_date=val("Order Date", "1"), date=val("Date", "2"),
+                 document_date=val("Document Date", "3"))
+    server.reply = mapping({"Order Date": "Date", "Date": "X", "Document Date": "X"})
+    merge([a], llm_settings(server))
+    assert sorted(c.value for c in a.cells.values()) == ["1", "2", "3"]
+
+
+def test_merge_table_columns_never_join_two_columns_of_one_table(server):  # I5b
+    a = make_row("a.pdf", line_items=table("Line Items", ["Unit Price", "Total"], [{"Unit Price": "5.00", "Total": "10.00"}]))
+    b = make_row("b.pdf", line_items=table("Line Items", ["Amount"], [{"Amount": "3.00"}]))
+
+    def reply(body):
+        if "column names" in json.dumps(body):
+            return json.dumps({"mapping": {"Unit Price": "Amount", "Total": "Amount"}})
+        return json.dumps({"mapping": {}})
+    server.reply = reply
+    merge([a, b], llm_settings(server))
+    assert sorted(a.cells["line_items"].value[0].values()) == ["10.00", "5.00"]

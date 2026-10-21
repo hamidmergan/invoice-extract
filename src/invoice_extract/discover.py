@@ -53,9 +53,9 @@ def _keyed(found: List[Cell], cells: Dict[str, Cell], row: Row) -> None:
             row.checks.append(Check("role_conflict", "warning",
                                     f"Several values look like {label}; checks that need it were skipped"))
     fixed = set(cells)  # e-invoice XML fields; the model's copies of them are dropped
-    for cell in found:
+    for cell in sorted(found, key=lambda c: not (c.role and counts[c.role] == 1)):
         if cell.role and counts[cell.role] == 1:
-            if cell.role in cells:
+            if cell.role in fixed:
                 continue  # the e-invoice XML already has this value
             cell.label = role_column(cell.role).label
             cells[cell.role] = cell
@@ -63,7 +63,8 @@ def _keyed(found: List[Cell], cells: Dict[str, Cell], row: Row) -> None:
             cell.role = ""
             if make_key(cell.label, ()) in fixed:
                 continue
-            cells[make_key(cell.label, cells)] = cell
+            # a label never takes a role key or File/Status, so checks only ever see role values
+            cells[make_key(cell.label, set(cells) | set(ROLES) | RESERVED)] = cell
 
 
 def discover_file(path: PathLike, settings: Settings, client: ClientGetter) -> Row:
@@ -156,18 +157,22 @@ def _merge_labels(rows: List[Row], settings: Settings, client: ClientGetter, kno
             if make_key(target, ()) == make_key(cell.label, ()):
                 target = cell.label  # the same name in other spelling, e.g. "line_items": keep the readable label
             if target not in new_keys:
-                taken = set(new_keys.values()) | {c.key for c in known}
+                taken = set(new_keys.values()) | {c.key for c in known} | RESERVED
                 new_keys[target] = keys_by_label.get(target) or make_key(target, taken)
             planned[key] = (new_keys[target], target)
-        targets = Counter(new for new, _ in planned.values())
+        final = {key: planned[key][0] if key in planned else key for key in row.cells}
+        while True:  # two items of this invoice never share a key; moved items that clash go back, until stable
+            counts = Counter(final.values())
+            clashing = [k for k, new in final.items() if new != k and counts[new] > 1]
+            if not clashing:
+                break
+            for k in clashing:
+                final[k] = k
         merged = {}
         for key, cell in row.cells.items():
-            new, label = planned.get(key, (key, cell.label))
-            clash = key in planned and (targets[new] > 1 or (new in row.cells and new not in planned))
-            if clash:
-                new, label = key, cell.label  # two items of this invoice stay apart
-            cell.label = label
-            merged[new] = cell
+            if key in planned and final[key] == planned[key][0]:
+                cell.label = planned[key][1]
+            merged[final[key]] = cell
         row.cells = merged
 
 
@@ -189,20 +194,15 @@ def _merge_tables(rows: List[Row], settings: Settings, client: ClientGetter) -> 
             _warn([row for row in rows if key in row.cells])
             continue
         for cell in cells:
-            columns: List[str] = []
+            rename: Dict[str, str] = {}
             for name in cell.columns:
-                if mapping.get(name, name) not in columns:
-                    columns.append(mapping.get(name, name))
-            renamed = []
-            for line in cell.value or []:
-                new_line = {c: "" for c in columns}
-                for name, text in line.items():
-                    target = mapping.get(name, name)
-                    if target in new_line and not new_line[target]:
-                        new_line[target] = text
-                renamed.append(new_line)
-            cell.columns = columns
-            cell.value = renamed
+                target = mapping.get(name, name)
+                if target in rename.values():  # two columns of one table are never joined
+                    target = name if name not in rename.values() else f"{name} ({len(rename) + 1})"
+                rename[name] = target
+            cell.columns = [rename[n] for n in cell.columns]
+            cell.value = [{rename[n]: line.get(n, "") for n in rename} for line in cell.value or []
+                          if isinstance(line, dict)]
 
 
 def merge_rows(rows: List[Row], settings: Settings, client: ClientGetter, known: Sequence[Column] = ()) -> None:

@@ -206,3 +206,13 @@ def test_text_block_in_invoices_sheet(tmp_path):
     row = Row(path="a.pdf", cells={"note": Cell(value=text, kind="text", label="Note")})
     export([row], tmp_path / "out.xlsx", [Column("note", "Note", kind="text")])
     assert openpyxl.load_workbook(tmp_path / "out.xlsx")["Invoices"]["A2"].value == text
+
+
+def test_sheet_titles_without_control_characters_or_quotes(tmp_path):  # M3
+    cols = [Column("t1", "Lines\x01\x02", kind="table", table_columns=["A"]),
+            Column("t2", "'Quoted'", kind="table", table_columns=["A"]),
+            Column("t3", "History", kind="table", table_columns=["A"])]
+    row = Row(path="a.pdf", cells={c.key: Cell(value=[{"A": "1"}], kind="table", columns=["A"]) for c in cols})
+    export([row], tmp_path / "out.xlsx", cols)
+    titles = openpyxl.load_workbook(tmp_path / "out.xlsx").sheetnames
+    assert "Lines" in titles and "Quoted" in titles and "History" not in titles

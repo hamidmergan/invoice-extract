@@ -289,3 +289,31 @@ def test_host_and_origin_guard(server):
     with client_for(resolve()) as client:
         evil = {"Origin": "http://evil.example"}
         assert client.put("/api/selection", json={"keys": []}, headers=evil).status_code == 403
+
+
+def test_stale_merge_does_not_start_a_second_merge(tmp_path, server):  # I3
+    a, b = customer_pdfs(tmp_path)
+    gates = [threading.Event(), threading.Event()]
+    inner = discovery_reply()
+    calls = []
+
+    def reply(body):
+        if prompt(body).startswith("You get labels"):
+            calls.append(1)
+            if len(calls) <= 2:
+                gates[len(calls) - 1].wait(5)
+        return inner(body)
+    server.reply = reply
+    with client_for(llm(server)) as client:
+        upload(client, a)
+        wait_for(lambda: len(calls) == 1)  # merge A runs
+        client.delete("/api/files")
+        upload(client, b)
+        wait_for(lambda: len(calls) == 2)  # merge B runs
+        gates[0].set()  # the stale merge A ends while B still runs
+        time.sleep(0.5)
+        gates[1].set()
+        state = wait_done(client)
+        time.sleep(0.3)
+    assert len(calls) == 2
+    assert [f["name"] for f in state["files"]] == ["b.pdf"]
