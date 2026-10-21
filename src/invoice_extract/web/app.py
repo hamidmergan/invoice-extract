@@ -28,6 +28,7 @@ from ..errors import InvoiceError
 from ..export import FORMATS, export, table_csv_path
 from ..normalize import normalize
 from ..pdf import page_count, render_page
+from . import einvoice_api
 from ..results import Cell, Check, Row
 
 STATIC = Path(__file__).parent / "static"
@@ -139,6 +140,25 @@ def create_app(settings: Settings, workdir: Optional[Path] = None,
             raise HTTPException(404, f"Unknown file id {file_id!r}")
         return entry
 
+    async def save_upload(upload_file: UploadFile):
+        """Store an upload under a random name; the original name is only shown, never used as a path."""
+        name = Path(upload_file.filename or "file").name or "file"
+        file_id = uuid.uuid4().hex
+        path = uploads / f"{file_id}{_suffix(name)}"
+        path.write_bytes(await upload_file.read())
+        return file_id, name, path
+
+    e_lookup = einvoice_api.register(app, settings, lock, pool, get_client, uploads, save_upload)
+
+    def page_entry_or_404(file_id: str):
+        """A file of the table view or of the e-invoice converter, for the page images."""
+        with lock:
+            entry = ws.files.get(file_id)
+        entry = entry or e_lookup(file_id)
+        if entry is None:
+            raise HTTPException(404, f"Unknown file id {file_id!r}")
+        return entry
+
     def finished_rows() -> List[Row]:
         """Rows of finished files. Call under the lock."""
         return [e.row for e in ws.files.values() if e.state == "done" and e.row is not None]
@@ -222,10 +242,7 @@ def create_app(settings: Settings, workdir: Optional[Path] = None,
                                      "(raise it with --max-files)")
         entries = []
         for upload_file in files:
-            name = Path(upload_file.filename or "file").name or "file"
-            file_id = uuid.uuid4().hex
-            path = uploads / f"{file_id}{_suffix(name)}"
-            path.write_bytes(await upload_file.read())
+            file_id, name, path = await save_upload(upload_file)
             entries.append(FileEntry(id=file_id, name=name, path=path))
         with lock:
             for entry in entries:
@@ -270,7 +287,7 @@ def create_app(settings: Settings, workdir: Optional[Path] = None,
 
     @app.get("/api/files/{file_id}/pages")
     def pages(file_id: str) -> Dict[str, int]:
-        entry = entry_or_404(file_id)
+        entry = page_entry_or_404(file_id)
         if entry.kind == "xml":
             return {"count": 0}
         try:
@@ -280,7 +297,7 @@ def create_app(settings: Settings, workdir: Optional[Path] = None,
 
     @app.get("/api/files/{file_id}/pages/{n}.png")
     def page_png(file_id: str, n: int) -> Response:
-        entry = entry_or_404(file_id)
+        entry = page_entry_or_404(file_id)
         with lock:
             png = ws.pngs.get((file_id, n))
         if png is None:

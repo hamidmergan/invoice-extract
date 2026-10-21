@@ -64,6 +64,21 @@ EINVOICE_FIELDS: List[Column] = [
            kind="table", table_columns=list(LINE_FIELDS)),
 ]
 
+# Where each read field lands in the EInvoice, as the dotted path the rules and the UI use.
+CELL_TO_FIELD = {
+    "invoice_no": "number", "doc_type": "type_code", "invoice_date": "issue_date", "supplier": "seller.name",
+    "seller_contact": "seller.contact_name", "buyer_name": "buyer.name", "net": "printed_net",
+    "vat": "printed_vat", "gross": "printed_gross",
+    **{f"seller_{k}": f"seller.{k}" for k in ("street", "postcode", "city", "country", "vat_id", "tax_number",
+                                                "phone", "email")},
+    **{f"buyer_{k}": f"buyer.{k}" for k in ("street", "postcode", "city", "country", "vat_id", "email")},
+}
+
+
+def field_path(key: str) -> str:
+    return CELL_TO_FIELD.get(key, key)
+
+
 UNIT_CODES = {
     "c62": "C62", "stk": "C62", "stk.": "C62", "stück": "C62", "piece": "C62", "pieces": "C62", "pcs": "C62",
     "x": "C62", "pauschal": "C62", "psch": "C62", "flat": "C62",
