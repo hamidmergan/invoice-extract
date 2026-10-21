@@ -1,19 +1,20 @@
 "use strict";
 
-// Review UI for invoice-extract. Plain DOM, no framework. All data goes in via textContent.
+// Review page for invoice-extract. Plain DOM, no framework. All data goes in via textContent.
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const RESERVED = new Set(["file", "status"]);
-const CLICKABLE_KINDS = new Set(["pdf", "zugferd"]);
+const E_INVOICE_KINDS = new Set(["xml", "zugferd"]);
 const ICONS = { ok: "✓", warning: "!", error: "×" };
 
 const ui = {
-  data: { columns: [], files: [], summary: { files: 0, columns: 0, to_check: 0 } },
+  data: { columns: [], files: [], summary: { files: 0, to_check: 0, reading: 0 } },
   selected: null,
   page: 1,
   pages: 0,
-  shownFile: null,
-  segments: null,
+  shown: null, // "<file id>:<state>" of the file the viewer currently shows
+  document: null, // the e-invoice document of the shown file, once loaded
+  showDocument: false,
   focusKey: null,
   editing: false,
   timer: null,
@@ -95,96 +96,51 @@ function display(value) {
   return value == null ? "" : String(value);
 }
 
-function statusText(file) {
-  if (file.state !== "done") return file.row ? "filling new columns…" : "reading…";
+function issuesOf(file) {
   const row = file.row;
-  if (row.error) return row.error;
+  if (!row) return [];
+  if (row.error) return [{ level: "error", message: row.error }];
   const issues = row.checks.filter((c) => c.level !== "ok");
-  for (const cell of Object.values(row.cells)) issues.push(...cell.checks.filter((c) => c.level !== "ok"));
+  for (const [key, cell] of Object.entries(row.cells)) {
+    const label = (ui.data.columns.find((c) => c.key === key) || { label: key }).label;
+    for (const c of cell.checks) {
+      if (c.level !== "ok") issues.push({ level: c.level, message: `${label}: ${c.message}` });
+    }
+  }
+  return issues;
+}
+
+function statusText(file) {
+  if (file.state !== "done") return "reading…";
+  if (file.row.error) return file.row.error;
+  const issues = issuesOf(file);
   return issues.length ? `Check: ${issues[0].message}` : "OK";
 }
 
 // ---- rendering ---------------------------------------------------------
 
 function render() {
-  renderStrip();
-  renderColumns();
-  renderValues();
-  renderChecks();
   renderSummary();
   if (!ui.editing) renderTable();
+  renderValues();
+  renderChecks();
   renderViewer();
-}
-
-function dotClass(file) {
-  return file.state === "done" ? file.status : file.state;
-}
-
-function renderStrip() {
-  const strip = $("strip");
-  strip.replaceChildren(...ui.data.files.map((f) => el("button", {
-    class: "chip" + (f.id === ui.selected ? " selected" : ""),
-    title: f.name,
-    onclick: () => select(f.id),
-  }, el("span", { class: `dot ${dotClass(f)}` }), el("span", { class: "name" }, f.name))));
-}
-
-function renderColumns() {
-  $("columns-title").textContent = `Columns (${ui.data.columns.length})`;
-  $("columns").replaceChildren(...ui.data.columns.map((c) => el("span", { class: "chip", title: c.hint || c.label },
-    c.label,
-    el("button", { class: "remove", "aria-label": `Remove column ${c.label}`, onclick: guard(() => removeColumn(c)) }, "×"))));
-}
-
-function renderValues() {
-  const list = $("values");
-  const file = selectedFile();
-  if (!file || !file.row || file.row.error) {
-    list.replaceChildren(el("dd", { class: "muted" }, file ? statusText(file) : "No file selected"));
-    return;
-  }
-  const items = [];
-  for (const col of ui.data.columns) {
-    if (RESERVED.has(col.key)) continue;
-    const cell = cellOf(file, col.key);
-    const hasBox = cell && cell.box;
-    items.push(el("dt", null, col.label));
-    items.push(el("dd", { class: hasBox ? "clickable" : null, onclick: hasBox ? () => focusCell(col.key, cell) : null },
-      el("span", { class: "value" }, cell && cell.value != null ? display(cell.value) : "–"),
-      cell && cell.source ? el("span", { class: "badge" }, cell.source) : null,
-      cell && cell.edited ? el("span", { class: "badge edited" }, "edited") : null));
-  }
-  list.replaceChildren(...items);
-}
-
-function renderChecks() {
-  const list = $("checks");
-  const file = selectedFile();
-  const checks = [];
-  if (file && file.row) {
-    if (file.row.error) checks.push({ level: "error", message: file.row.error });
-    else {
-      checks.push(...file.row.checks);
-      for (const [key, cell] of Object.entries(file.row.cells)) {
-        const label = (ui.data.columns.find((c) => c.key === key) || { label: key }).label;
-        for (const c of cell.checks) checks.push({ level: c.level, message: `${label}: ${c.message}` });
-      }
-    }
-  }
-  if (!checks.length) {
-    list.replaceChildren(el("li", { class: "muted" }, file ? "No checks yet" : "No file selected"));
-    return;
-  }
-  list.replaceChildren(...checks.map((c) => el("li", null,
-    el("span", { class: `icon ${c.level}` }, ICONS[c.level] || "•"), el("span", null, c.message))));
 }
 
 function renderSummary() {
   const s = ui.data.summary;
-  const reading = ui.data.files.filter((f) => f.state !== "done").length;
-  let text = `${s.files} files · ${s.columns} columns · ${s.to_check} to check`;
-  if (reading) text += ` · ${reading} reading`;
+  if (!s.files) {
+    $("summary").textContent = "Add the invoices you received. Every value is checked and can be corrected; "
+      + "the table goes to Excel, CSV or JSON.";
+    return;
+  }
+  let text = `${s.files} invoice${s.files === 1 ? "" : "s"} · ${s.to_check} to check`;
+  if (s.reading) text += ` · ${s.reading} reading`;
   $("summary").textContent = text;
+}
+
+function dotClass(file) {
+  return file.state === "done" ? file.status : "pending";
 }
 
 function renderTable() {
@@ -198,15 +154,18 @@ function renderTable() {
 }
 
 function tableCell(file, col) {
-  if (col.key === "file") return el("td", null, file.name);
+  if (col.key === "file") {
+    return el("td", { class: "file-cell", title: file.name }, el("span", { class: `dot ${dotClass(file)}` }), file.name);
+  }
   if (col.key === "status") {
     return el("td", { class: file.state === "done" && file.status !== "ok" ? `status-${file.status}` : null },
       statusText(file));
   }
   const cell = cellOf(file, col.key);
-  const editable = file.state === "done" && !file.row.error;
-  const classes = [editable ? "editable" : "", cell && cell.edited ? "edited" : ""].join(" ").trim();
-  const td = el("td", { class: classes || null }, cell ? display(cell.value) : "");
+  const editable = file.state === "done" && !file.row.error && col.kind !== "table";
+  const classes = [editable ? "editable" : "", cell && cell.edited ? "edited" : "",
+    col.type === "amount" ? "amount" : ""].join(" ").trim();
+  const td = el("td", { class: classes || null, title: cell && cell.raw ? cell.raw : null }, cellText(cell));
   if (editable) {
     td.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -217,11 +176,17 @@ function tableCell(file, col) {
   return td;
 }
 
+function cellText(cell) {
+  if (!cell || cell.value == null) return "";
+  if (cell.kind === "table") return `${cell.value.length} rows`;
+  return display(cell.value);
+}
+
 function editCell(td, file, col, cell) {
   if (ui.editing) return;
   ui.editing = true;
   const input = el("input", { type: "text", "aria-label": col.label });
-  input.value = cell ? display(cell.value) : "";
+  input.value = cell && cell.value != null && cell.kind !== "table" ? display(cell.value) : "";
   let done = false;
   const finish = () => { done = true; ui.editing = false; renderTable(); };
   input.addEventListener("keydown", guard(async (event) => {
@@ -243,7 +208,51 @@ function editCell(td, file, col, cell) {
   input.select();
 }
 
-// ---- page viewer -------------------------------------------------------
+function renderValues() {
+  const list = $("values");
+  const file = selectedFile();
+  if (!file || !file.row || file.row.error) {
+    list.replaceChildren(el("dd", { class: "muted" }, file ? statusText(file) : "No invoice selected"));
+    return;
+  }
+  const items = [];
+  for (const col of ui.data.columns) {
+    if (RESERVED.has(col.key)) continue;
+    const cell = cellOf(file, col.key);
+    const hasBox = cell && cell.box;
+    items.push(el("dt", null, col.label));
+    items.push(el("dd", { class: hasBox ? "clickable" : null, title: hasBox ? "Show on the page" : null,
+      onclick: hasBox ? () => focusCell(col.key, cell) : null },
+    el("span", { class: "value" }, cell && cell.value != null ? cellText(cell) : "–"),
+    cell && cell.source ? el("span", { class: "badge", title: sourceTitle(cell.source) }, cell.source) : null,
+    cell && cell.edited ? el("span", { class: "badge edited" }, "edited") : null));
+  }
+  list.replaceChildren(...items);
+}
+
+function sourceTitle(source) {
+  return { xml: "Read from the e-invoice XML, exact", text: "Read by the model from the PDF text",
+    vision: "Read by the vision model from the scan", manual: "Entered by you" }[source] || source;
+}
+
+function renderChecks() {
+  const list = $("checks");
+  const file = selectedFile();
+  const checks = file && file.row && !file.row.error
+    ? [...file.row.checks, ...Object.entries(file.row.cells).flatMap(([key, cell]) => cell.checks.map((c) => ({
+      level: c.level, message: `${(ui.data.columns.find((x) => x.key === key) || { label: key }).label}: ${c.message}`,
+    })))]
+    : issuesOf(file || { row: null });
+  if (!checks.length) {
+    list.replaceChildren(el("li", { class: "muted" }, file ? (file.state === "done" ? "Nothing to check" : "reading…")
+      : "No invoice selected"));
+    return;
+  }
+  list.replaceChildren(...checks.map((c) => el("li", null,
+    el("span", { class: `icon ${c.level}` }, ICONS[c.level] || "•"), el("span", null, c.message))));
+}
+
+// ---- viewer ------------------------------------------------------------
 
 function select(id) {
   if (id === ui.selected) return;
@@ -254,22 +263,31 @@ function select(id) {
 
 async function renderViewer() {
   const file = selectedFile();
-  $("viewer-name").textContent = file ? file.name : "No file selected";
+  $("viewer-name").textContent = file ? file.name : "No invoice selected";
   if (!file) {
-    ui.shownFile = null;
-    $("page-wrap").hidden = true;
-    $("viewer-help").hidden = false;
-    updatePager();
+    ui.shown = null;
+    ui.document = null;
+    showPage();
     return;
   }
-  if (ui.shownFile !== file.id) {
-    ui.shownFile = file.id;
-    ui.page = 1;
-    ui.pages = 0;
-    closeSegments();
+  const key = `${file.id}:${file.state}`;
+  if (ui.shown !== key) {
+    const sameFile = ui.shown !== null && ui.shown.split(":")[0] === file.id;
+    ui.shown = key;
+    if (!sameFile) {
+      ui.page = 1;
+      ui.pages = 0;
+      ui.document = null;
+      ui.showDocument = false;
+    }
     const res = await api("GET", `/api/files/${encodeURIComponent(file.id)}/pages`).catch(() => ({ count: 0 }));
-    if (ui.shownFile !== file.id) return;
+    if (ui.shown !== key) return;
     ui.pages = res.count;
+    if (E_INVOICE_KINDS.has(file.kind) && file.state === "done") {
+      ui.document = await api("GET", `/api/files/${encodeURIComponent(file.id)}/document`).catch(() => null);
+      if (ui.shown !== key) return;
+      if (!ui.pages) ui.showDocument = true;
+    }
     showPage();
   }
   drawOverlay();
@@ -279,25 +297,41 @@ function showPage() {
   const file = selectedFile();
   const wrap = $("page-wrap");
   const help = $("viewer-help");
+  const sheet = $("document");
+  const showDoc = Boolean(file && ui.document && ui.showDocument);
   updatePager();
+  $("toggle-document").hidden = !(file && ui.document && ui.pages);
+  $("toggle-document").textContent = ui.showDocument ? "Show page" : "Show e-invoice data";
+  $("print-button").hidden = !showDoc;
+  sheet.hidden = !showDoc;
+  if (showDoc) {
+    wrap.hidden = true;
+    help.hidden = true;
+    sheet.replaceChildren(...documentNodes(ui.document));
+    return;
+  }
   if (!file || !ui.pages) {
     wrap.hidden = true;
     help.hidden = false;
-    help.textContent = file && file.kind === "xml"
-      ? "E-invoice (XML): no page image. The values come straight from the file."
-      : "No preview for this file.";
+    if (!file) help.textContent = "Add invoices to start. Click a row to see the page and where each value was found; "
+      + "click a cell to correct it.";
+    else if (file.state !== "done") help.textContent = "Reading…";
+    else if (file.row && file.row.error) help.textContent = "This file could not be read.";
+    else help.textContent = "No preview for this file.";
     return;
   }
   help.hidden = false;
-  help.textContent = CLICKABLE_KINDS.has(file.kind)
-    ? "Click a spot on the page to pick a field as a new column."
-    : "Boxes show where the model found each value.";
+  help.textContent = file.kind === "scan" ? "Boxes come from the vision model and are best effort."
+    : "Boxes show where each value was found. Click a value on the right to jump to it.";
   wrap.hidden = false;
   $("page-image").src = `/api/files/${encodeURIComponent(file.id)}/pages/${ui.page}.png`;
 }
 
 function updatePager() {
-  $("page-label").textContent = ui.pages ? `Page ${ui.page} of ${ui.pages}` : "";
+  const paging = ui.pages > 0 && !ui.showDocument;
+  $("page-label").textContent = paging ? `Page ${ui.page} of ${ui.pages}` : "";
+  $("prev-page").hidden = !paging;
+  $("next-page").hidden = !paging;
   $("prev-page").disabled = ui.page <= 1;
   $("next-page").disabled = ui.page >= ui.pages;
 }
@@ -306,15 +340,20 @@ function turnPage(delta) {
   const page = ui.page + delta;
   if (page < 1 || page > ui.pages) return;
   ui.page = page;
-  closeSegments();
   showPage();
+}
+
+function toggleDocument() {
+  ui.showDocument = !ui.showDocument;
+  showPage();
+  drawOverlay();
 }
 
 function drawOverlay() {
   const img = $("page-image");
   const overlay = $("overlay");
   const file = selectedFile();
-  if (!file || !img.naturalWidth) {
+  if (!file || !img.naturalWidth || $("page-wrap").hidden) {
     overlay.replaceChildren();
     return;
   }
@@ -343,73 +382,70 @@ function drawOverlay() {
     tag.append(text);
     nodes.push(tag);
   }
-  for (const seg of ui.segments || []) {
-    const b = seg.box;
-    const rect = svg("rect", { class: "seg", x: b.x0 * w, y: b.y0 * h, width: (b.x1 - b.x0) * w,
-      height: (b.y1 - b.y0) * h });
-    rect.dataset.index = seg.index;
-    nodes.push(rect);
-  }
   overlay.replaceChildren(...nodes);
 }
 
 function focusCell(key, cell) {
   ui.focusKey = key;
+  if (ui.showDocument) ui.showDocument = false;
   if (cell.box.page !== ui.page && cell.box.page <= ui.pages) {
     ui.page = cell.box.page;
-    closeSegments();
     showPage();
   } else {
+    showPage();
     drawOverlay();
   }
 }
 
-async function onOverlayClick(event) {
-  const file = selectedFile();
-  if (!file || !CLICKABLE_KINDS.has(file.kind)) return;
-  const index = event.target.dataset && event.target.dataset.index;
-  if (index !== undefined) {
-    openPopover(ui.segments.find((s) => String(s.index) === index));
-    return;
-  }
-  if (ui.segments) {
-    closeSegments();
-    return;
-  }
-  ui.segments = await api("GET", `/api/files/${encodeURIComponent(file.id)}/pages/${ui.page}/segments`);
-  if (!ui.segments.length) toast("This page has no text layer to pick from.");
-  drawOverlay();
-}
+// ---- the e-invoice sheet -----------------------------------------------
 
-function closeSegments() {
-  ui.segments = null;
-  $("popover").hidden = true;
-  drawOverlay();
-}
-
-function openPopover(seg) {
-  if (!seg) return;
-  const pop = $("popover");
-  pop.dataset.index = seg.index;
-  pop.style.left = `${Math.min(seg.box.x0 * 100, 60)}%`;
-  pop.style.top = `${seg.box.y1 * 100}%`;
-  $("popover-example").textContent = `Example: "${seg.text.trim()}"`;
-  $("popover-title").value = "";
-  pop.hidden = false;
-  $("popover-title").focus();
-}
-
-async function createFromPopover() {
-  const label = $("popover-title").value.trim();
-  if (!label) {
-    toast("Give the column a title first.");
-    return;
-  }
-  const file = selectedFile();
-  const index = Number($("popover").dataset.index);
-  await api("POST", "/api/columns", { label, from: { file_id: file.id, page: ui.page, index } });
-  closeSegments();
-  await refresh();
+function documentNodes(doc) {
+  const money = (value) => (value ? `${value} ${doc.currency || ""}`.trim() : "");
+  const line = (text, cls) => (text ? el("div", { class: cls || null }, text) : null);
+  const party = (p, title) => el("div", { class: "sheet-party" },
+    el("h3", null, title),
+    el("div", { class: "sheet-name" }, p.name || "–"),
+    line(p.street), line([p.postcode, p.city].filter(Boolean).join(" ")), line(p.country),
+    line(p.vat_id && `VAT ID ${p.vat_id}`, "muted"), line(p.tax_number && `Tax no. ${p.tax_number}`, "muted"),
+    line(p.contact, "muted"), line(p.email, "muted"), line(p.phone, "muted"));
+  const facts = [
+    ["Date", doc.issue_date], ["Due", doc.due_date], ["Delivery", doc.delivery_date],
+    ["Period", doc.period_start || doc.period_end ? `${doc.period_start} – ${doc.period_end}` : ""],
+    ["Buyer reference", doc.buyer_reference], ["Order", doc.order_reference], ["Currency", doc.currency],
+  ].filter(([, value]) => value);
+  const totals = [
+    ["Lines total", doc.totals.lines], ["Allowances", doc.totals.allowances], ["Charges", doc.totals.charges],
+    ["Net", doc.totals.net], ["VAT", doc.totals.vat], ["Gross", doc.totals.gross], ["Prepaid", doc.totals.prepaid],
+    ["Amount due", doc.totals.due],
+  ].filter(([, value]) => value);
+  const payment = [
+    ["Payment", doc.payment.means], ["IBAN", doc.payment.iban], ["BIC", doc.payment.bic],
+    ["Account", doc.payment.account_name], ["Terms", doc.payment.terms], ["Mandate", doc.payment.mandate_reference],
+  ].filter(([, value]) => value);
+  const table = (headers, rows, cls) => el("table", { class: `sheet-table ${cls || ""}`.trim() },
+    el("thead", null, el("tr", null, headers.map((h) => el("th", { class: h.right ? "amount" : null }, h.text)))),
+    el("tbody", null, rows.map((cells) => el("tr", null,
+      cells.map((c, i) => el("td", { class: headers[i].right ? "amount" : null }, c))))));
+  const pairs = (items, cls) => el("dl", { class: `sheet-pairs ${cls || ""}`.trim() },
+    items.flatMap(([label, value]) => [el("dt", null, label), el("dd", null, value)]));
+  return [
+    el("header", { class: "sheet-head" },
+      el("h2", null, `${doc.kind === "credit note" ? "Credit note" : "Invoice"} ${doc.number}`.trim()),
+      pairs(facts)),
+    el("div", { class: "sheet-parties" }, party(doc.seller, "From"), party(doc.buyer, "To")),
+    doc.lines.length ? table(
+      [{ text: "#" }, { text: "Description" }, { text: "Qty", right: true }, { text: "Unit" },
+        { text: "Unit price", right: true }, { text: "VAT %", right: true }, { text: "Amount", right: true }],
+      doc.lines.map((l, i) => [String(i + 1), l.description, l.quantity, l.unit, l.unit_price, l.vat_rate, l.amount]))
+      : el("p", { class: "muted" }, "No lines"),
+    el("div", { class: "sheet-foot" },
+      doc.taxes.length ? table(
+        [{ text: "VAT" }, { text: "Rate %", right: true }, { text: "Basis", right: true }, { text: "Tax", right: true }],
+        doc.taxes.map((t) => [t.category, t.rate, t.basis, t.tax]), "sheet-taxes") : null,
+      pairs(totals.map(([label, value]) => [label, money(value)]), "sheet-totals")),
+    payment.length ? pairs(payment, "sheet-payment") : null,
+    doc.notes.length ? el("div", { class: "sheet-notes" }, doc.notes.map((n) => el("p", null, n))) : null,
+  ];
 }
 
 // ---- actions -----------------------------------------------------------
@@ -422,33 +458,8 @@ async function uploadFiles(list) {
   await refresh();
 }
 
-async function removeColumn(col) {
-  await api("DELETE", `/api/columns/${encodeURIComponent(col.key)}`);
-  await refresh();
-}
-
-async function addColumn(event) {
-  event.preventDefault();
-  const input = $("add-column-label");
-  const label = input.value.trim();
-  if (!label) return;
-  await api("POST", "/api/columns", { label });
-  input.value = "";
-  await refresh();
-}
-
-async function loadTemplate(event) {
-  const file = event.target.files[0];
-  event.target.value = "";
-  if (!file) return;
-  const form = new FormData();
-  form.append("file", file, file.name);
-  await api("POST", "/api/template", form);
-  await refresh();
-}
-
 async function clearAll() {
-  if (!ui.data.files.length || !confirm("Remove all files from this session?")) return;
+  if (!ui.data.files.length || !confirm("Remove all invoices from this session?")) return;
   await api("DELETE", "/api/files");
   await refresh();
 }
@@ -462,6 +473,10 @@ function toggleExport(open) {
 
 function exportAs(format) {
   toggleExport(false);
+  if (!ui.data.files.length) {
+    toast("Add invoices first.");
+    return;
+  }
   const link = el("a", { href: `/api/export?format=${format}`, download: `invoices.${format}` });
   document.body.append(link);
   link.click();
@@ -497,18 +512,13 @@ function setup() {
   $("clear-button").addEventListener("click", guard(clearAll));
   $("prev-page").addEventListener("click", () => turnPage(-1));
   $("next-page").addEventListener("click", () => turnPage(1));
+  $("toggle-document").addEventListener("click", toggleDocument);
+  $("print-button").addEventListener("click", () => window.print());
   $("page-image").addEventListener("load", drawOverlay);
-  $("overlay").addEventListener("click", guard(onOverlayClick));
-  $("popover-cancel").addEventListener("click", () => { $("popover").hidden = true; });
-  $("popover-create").addEventListener("click", guard(createFromPopover));
-  $("popover-title").addEventListener("keydown", (event) => {
-    if (event.key === "Enter") guard(createFromPopover)();
-    if (event.key === "Escape") $("popover").hidden = true;
-  });
-  $("add-column").addEventListener("submit", guard(addColumn));
-  $("template-input").addEventListener("change", guard(loadTemplate));
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && ui.segments && !ui.editing) closeSegments();
+    if (ui.editing || event.target.tagName === "INPUT") return;
+    if (event.key === "ArrowLeft") turnPage(-1);
+    if (event.key === "ArrowRight") turnPage(1);
   });
   guard(refresh)();
 }
