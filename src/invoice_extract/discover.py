@@ -1,17 +1,19 @@
 """Discovery: the model lists everything on an invoice; fields are then merged across invoices."""
 
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
-from typing import Dict, List, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from .cells import cell_from_item
 from .checks import run_checks
-from .columns import make_key, role_column
+from .columns import RESERVED, ROLES, Column, make_key, role_column
 from .config import Settings
 from .core import ClientGetter, _pdf_text, _scan_boxes, _transcribe
 from .detect import detect, embedded_xml
 from .einvoice import LINE_COLUMNS, parse_line_items, parse_xml, xml_text
-from .llm import discover_items
+from .errors import InvoiceError
+from .llm import discover_items, merge_labels, merge_table_columns
 from .normalize import display_variants, normalize
 from .pdf import locate
 from .results import Cell, Check, Row
@@ -91,3 +93,165 @@ def discover_file(path: PathLike, settings: Settings, client: ClientGetter) -> R
     row.cells = cells
     row.checks = row.checks + run_checks(row, [])
     return row
+
+
+MERGE_FAILED = Check("merge_failed", "warning", "Fields could not be merged across invoices")
+
+
+def _filled(cell: Cell) -> bool:
+    return cell.value not in (None, "", [])
+
+
+def _example(cell: Cell) -> str:
+    if cell.kind == "table":
+        return ", ".join(cell.columns)
+    text = str(cell.value)
+    return text if len(text) <= 60 else text[:57] + "..."
+
+
+def _warn(rows: List[Row]) -> None:
+    for row in rows:
+        if MERGE_FAILED not in row.checks:
+            row.checks.append(MERGE_FAILED)
+
+
+def _merge_labels(rows: List[Row], settings: Settings, client: ClientGetter, known: Sequence[Column]) -> None:
+    entries: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        for key, cell in row.cells.items():
+            if cell.role or key in RESERVED:
+                continue
+            entry = entries.setdefault(cell.label, {"label": cell.label, "kind": cell.kind, "type": cell.type,
+                                                    "examples": []})
+            if _filled(cell) and len(entry["examples"]) < 2:
+                entry["examples"].append(_example(cell))
+    if not entries:
+        return
+    try:
+        mapping = merge_labels(client(), settings.model, list(entries.values()), [c.label for c in known])
+    except InvoiceError:
+        _warn(rows)
+        return
+    keys_by_label = {role_column(role).label: role for role in ROLES}
+    keys_by_label.update({c.label: c.key for c in known})
+    new_keys: Dict[str, str] = {}
+    for row in rows:
+        planned = {}
+        for key, cell in row.cells.items():
+            if cell.role or key in RESERVED:
+                continue
+            target = mapping.get(cell.label, cell.label)
+            if target not in new_keys:
+                taken = set(new_keys.values()) | {c.key for c in known}
+                new_keys[target] = keys_by_label.get(target) or make_key(target, taken)
+            planned[key] = (new_keys[target], target)
+        targets = Counter(new for new, _ in planned.values())
+        merged = {}
+        for key, cell in row.cells.items():
+            new, label = planned.get(key, (key, cell.label))
+            clash = key in planned and (targets[new] > 1 or (new in row.cells and new not in planned))
+            if clash:
+                new, label = key, cell.label  # two items of this invoice stay apart
+            cell.label = label
+            merged[new] = cell
+        row.cells = merged
+
+
+def _merge_tables(rows: List[Row], settings: Settings, client: ClientGetter) -> None:
+    by_key: Dict[str, List[Cell]] = {}
+    for row in rows:
+        for key, cell in row.cells.items():
+            if cell.kind == "table":
+                by_key.setdefault(key, []).append(cell)
+    for key, cells in by_key.items():
+        names: List[str] = []
+        for cell in cells:
+            names.extend(n for n in cell.columns if n not in names)
+        if len({tuple(c.columns) for c in cells}) < 2:
+            continue
+        try:
+            mapping = merge_table_columns(client(), settings.model, names)
+        except InvoiceError:
+            _warn([row for row in rows if key in row.cells])
+            continue
+        for cell in cells:
+            columns: List[str] = []
+            for name in cell.columns:
+                if mapping.get(name, name) not in columns:
+                    columns.append(mapping.get(name, name))
+            renamed = []
+            for line in cell.value or []:
+                new_line = {c: "" for c in columns}
+                for name, text in line.items():
+                    target = mapping.get(name, name)
+                    if target in new_line and not new_line[target]:
+                        new_line[target] = text
+                renamed.append(new_line)
+            cell.columns = columns
+            cell.value = renamed
+
+
+def merge_rows(rows: List[Row], settings: Settings, client: ClientGetter, known: Sequence[Column] = ()) -> None:
+    """Give fields that mean the same thing on different invoices one key and label (rows change in place)."""
+    live = [row for row in rows if not row.error]
+    if not live or not (settings.base_url and settings.model):
+        return
+    _merge_labels(live, settings, client, known)
+    _merge_tables(live, settings, client)
+
+
+def field_counts(rows: List[Row]) -> Dict[str, int]:
+    """In how many readable invoices each field has a value."""
+    counts: Counter = Counter()
+    for row in rows:
+        if not row.error:
+            counts.update(key for key, cell in row.cells.items() if key not in RESERVED and _filled(cell))
+    return dict(counts)
+
+
+def fields_of(rows: List[Row], known: Sequence[Column] = ()) -> List[Column]:
+    """One column per field found: known fields first, then by count, then by first appearance."""
+    found: Dict[str, Column] = {}
+    for row in rows:
+        if row.error:
+            continue
+        for key, cell in row.cells.items():
+            if key in RESERVED:
+                continue
+            col = found.get(key)
+            if col is None:
+                found[key] = Column(key, cell.label or key, type=cell.type if cell.kind == "value" else "text",
+                                    kind=cell.kind, role=cell.role, table_columns=list(cell.columns))
+            else:
+                col.table_columns.extend(n for n in cell.columns if n not in col.table_columns)
+    counts = field_counts(rows)
+    order = list(found)
+    result = []
+    for col in known:
+        extra = found.get(col.key)
+        columns = list(col.table_columns)
+        if extra is not None:
+            columns.extend(n for n in extra.table_columns if n not in columns)
+        result.append(replace(col, table_columns=columns))
+    known_keys = {c.key for c in known}
+    rest = sorted((k for k in order if k not in known_keys), key=lambda k: (-counts.get(k, 0), order.index(k)))
+    return result + [found[k] for k in rest]
+
+
+def with_hints(fields: List[Column], rows: List[Row]) -> List[Column]:
+    """Copies of the fields; those without a hint get one from example values, for saving as a template."""
+    hinted = []
+    for col in fields:
+        hint: Optional[str] = col.hint
+        if not hint and col.kind == "table" and col.table_columns:
+            hint = f"Columns: {', '.join(col.table_columns)}."
+        elif not hint:
+            examples = []
+            for row in rows:
+                cell = row.cells.get(col.key)
+                if cell is not None and not row.error and _filled(cell) and len(examples) < 2:
+                    examples.append(_example(cell))
+            if examples:
+                hint = "Example values: " + ", ".join(f'"{e}"' for e in examples) + "."
+        hinted.append(replace(col, hint=hint or ""))
+    return hinted

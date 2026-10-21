@@ -86,3 +86,109 @@ def test_scan_discovery_boxes(tmp_path, server):
     row = run(scan, llm_settings(server))
     assert row.kind == "scan"
     assert row.cells["gross"].box is not None and row.cells["gross"].source == "vision"
+
+
+# --- merging across invoices ---
+
+from invoice_extract.columns import Column  # noqa: E402
+from invoice_extract.discover import field_counts, fields_of, merge_rows, with_hints  # noqa: E402
+from invoice_extract.results import Cell, Row  # noqa: E402
+
+
+def val(label, value, role=""):
+    return Cell(value=value, label=label, kind="value", role=role, type="text", source="text")
+
+
+def table(label, columns, rows):
+    return Cell(value=rows, label=label, kind="table", columns=list(columns), source="text")
+
+
+def make_row(name, **cells):
+    return Row(name, kind="pdf", cells=dict(cells))
+
+
+def mapping(m):
+    return lambda body: json.dumps({"mapping": m})
+
+
+def merge(rows, settings, known=()):
+    merge_rows(rows, settings, _lazy_client(settings, None), known)
+
+
+def test_merge_maps_labels_across_rows(server):
+    a = make_row("a.pdf", kd_nr=val("Kd.-Nr.", "1"), gross=val("Gross", "9", role="gross"))
+    b = make_row("b.pdf", customer_number=val("Customer number", "2"))
+    server.reply = mapping({"Kd.-Nr.": "Customer No.", "Customer number": "Customer No."})
+    merge([a, b], llm_settings(server))
+    assert list(a.cells) == ["customer_no", "gross"] and list(b.cells) == ["customer_no"]
+    assert a.cells["customer_no"].label == "Customer No." and b.cells["customer_no"].value == "2"
+    payload = json.loads(server.requests[0]["body"]["messages"][-1]["content"])
+    assert [entry["label"] for entry in payload["labels"]] == ["Kd.-Nr.", "Customer number"]  # roles are not sent
+
+
+def test_merge_keeps_same_invoice_items_apart(server):  # Review Focus 2
+    a = make_row("a.pdf", vat_7=val("VAT 7 %", "7"), vat_19=val("VAT 19 %", "19"))
+    b = make_row("b.pdf", tax=val("Tax", "5"))
+    server.reply = mapping({"VAT 7 %": "VAT", "VAT 19 %": "VAT", "Tax": "VAT"})
+    merge([a, b], llm_settings(server))
+    assert set(a.cells) == {"vat_7", "vat_19"}
+    assert set(b.cells) == {"vat"} and b.cells["vat"].label == "VAT"
+
+
+def test_merge_uses_known_keys(server):
+    a = make_row("a.pdf", kunden_nr=val("Kunden-Nr.", "1"))
+    server.reply = mapping({"Kunden-Nr.": "Customer No."})
+    merge([a], llm_settings(server), known=[Column("cust", "Customer No.")])
+    assert list(a.cells) == ["cust"]
+
+
+def test_merge_failure_warns(server):
+    a = make_row("a.pdf", kd_nr=val("Kd.-Nr.", "1"))
+    server.status = 500
+    merge([a], llm_settings(server))
+    assert list(a.cells) == ["kd_nr"]
+    assert "merge_failed" in [c.name for c in a.checks]
+
+
+def test_merge_without_model_makes_no_request(server):
+    a = make_row("a.pdf", kd_nr=val("Kd.-Nr.", "1"))
+    merge([a], resolve())
+    assert list(a.cells) == ["kd_nr"] and server.requests == []
+
+
+def test_merge_table_columns_per_table(server):
+    a = make_row("a.pdf", line_items=table("Line Items", ["Artikel", "Betrag EUR"], [{"Artikel": "P", "Betrag EUR": "1"}]))
+    b = make_row("b.pdf", line_items=table("Line Items", ["Description", "Amount"], [{"Description": "T", "Amount": "2"}]))
+
+    def reply(body):
+        if "column names" in json.dumps(body):
+            return json.dumps({"mapping": {"Artikel": "Description", "Betrag EUR": "Amount"}})
+        return json.dumps({"mapping": {}})
+    server.reply = reply
+    merge([a, b], llm_settings(server))
+    for row in (a, b):
+        assert row.cells["line_items"].columns == ["Description", "Amount"]
+    assert a.cells["line_items"].value == [{"Description": "P", "Amount": "1"}]
+
+
+def test_fields_of_order_and_counts():
+    rows = [make_row("a.pdf", note=val("Note", "x"), cust=val("Customer No.", "1")),
+            make_row("b.pdf", cust=val("Customer No.", "2"), lines=table("Line Items", ["A"], [{"A": "1"}])),
+            make_row("c.pdf", cust=val("Customer No.", ""), lines=table("Line Items", ["B"], [{"B": "2"}])),
+            Row("d.pdf", error="broken")]
+    assert field_counts(rows) == {"note": 1, "cust": 2, "lines": 2}
+    fields = fields_of(rows, known=[Column("note", "Note")])
+    assert [f.key for f in fields] == ["note", "cust", "lines"]
+    assert fields[2].kind == "table" and fields[2].table_columns == ["A", "B"]
+
+
+def test_with_hints():
+    rows = [make_row("a.pdf", cust=val("Customer No.", "K-1"), lines=table("Line Items", ["A"], [{"A": "1"}])),
+            make_row("b.pdf", cust=val("Customer No.", "K-2"))]
+    fields = [Column("cust", "Customer No."), Column("lines", "Line Items", kind="table", table_columns=["A", "B"]),
+              Column("x", "X", hint="keep me")]
+    hinted = with_hints(fields, rows)
+    assert hinted[0].hint == 'Example values: "K-1", "K-2".'
+    assert hinted[1].hint == "Columns: A, B."
+    assert hinted[2].hint == "keep me"
+    assert fields[0].hint == ""
