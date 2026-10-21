@@ -60,3 +60,120 @@ def add_attachment(pdf_bytes: bytes, name: str, data: bytes) -> bytes:
         return out.getvalue()
     finally:
         doc.close()
+
+
+SAMPLE = {
+    "invoice_no": "RE-2026-001",
+    "invoice_date": "2026-10-21",
+    "due_date": "2026-11-20",
+    "supplier": "ACME GmbH",
+    "currency": "EUR",
+    "net": "100.00",
+    "vat": "19.00",
+    "gross": "119.00",
+    "iban": "DE89370400440532013000",
+}
+
+
+def cii_xml(**values) -> bytes:
+    """A minimal ZUGFeRD/Factur-X (CII) invoice with the standard fields."""
+    v = {**SAMPLE, **values}
+    issue = v["invoice_date"].replace("-", "")
+    due = v["due_date"].replace("-", "")
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<rsm:CrossIndustryInvoice
+    xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"
+    xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100"
+    xmlns:udt="urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100">
+  <rsm:ExchangedDocument>
+    <ram:ID>{v["invoice_no"]}</ram:ID>
+    <ram:IssueDateTime><udt:DateTimeString format="102">{issue}</udt:DateTimeString></ram:IssueDateTime>
+  </rsm:ExchangedDocument>
+  <rsm:SupplyChainTradeTransaction>
+    <ram:ApplicableHeaderTradeAgreement>
+      <ram:SellerTradeParty><ram:Name>{v["supplier"]}</ram:Name></ram:SellerTradeParty>
+    </ram:ApplicableHeaderTradeAgreement>
+    <ram:ApplicableHeaderTradeSettlement>
+      <ram:InvoiceCurrencyCode>{v["currency"]}</ram:InvoiceCurrencyCode>
+      <ram:SpecifiedTradeSettlementPaymentMeans>
+        <ram:PayeePartyCreditorFinancialAccount><ram:IBANID>{v["iban"]}</ram:IBANID></ram:PayeePartyCreditorFinancialAccount>
+      </ram:SpecifiedTradeSettlementPaymentMeans>
+      <ram:SpecifiedTradePaymentTerms>
+        <ram:DueDateDateTime><udt:DateTimeString format="102">{due}</udt:DateTimeString></ram:DueDateDateTime>
+      </ram:SpecifiedTradePaymentTerms>
+      <ram:SpecifiedTradeSettlementHeaderMonetarySummation>
+        <ram:TaxBasisTotalAmount>{v["net"]}</ram:TaxBasisTotalAmount>
+        <ram:TaxTotalAmount currencyID="{v["currency"]}">{v["vat"]}</ram:TaxTotalAmount>
+        <ram:GrandTotalAmount>{v["gross"]}</ram:GrandTotalAmount>
+      </ram:SpecifiedTradeSettlementHeaderMonetarySummation>
+    </ram:ApplicableHeaderTradeSettlement>
+  </rsm:SupplyChainTradeTransaction>
+</rsm:CrossIndustryInvoice>
+""".encode("utf-8")
+
+
+def ubl_xml(party_name_only: bool = False, **values) -> bytes:
+    """A minimal XRechnung (UBL) invoice. `party_name_only` omits the legal name."""
+    v = {**SAMPLE, **values}
+    legal = (
+        ""
+        if party_name_only
+        else f"<cac:PartyLegalEntity><cbc:RegistrationName>{v['supplier']}</cbc:RegistrationName></cac:PartyLegalEntity>"
+    )
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
+    xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+    xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+  <cbc:ID>{v["invoice_no"]}</cbc:ID>
+  <cbc:IssueDate>{v["invoice_date"]}</cbc:IssueDate>
+  <cbc:DueDate>{v["due_date"]}</cbc:DueDate>
+  <cbc:DocumentCurrencyCode>{v["currency"]}</cbc:DocumentCurrencyCode>
+  <cac:AccountingSupplierParty>
+    <cac:Party>
+      <cac:PartyName><cbc:Name>{v["supplier"]}</cbc:Name></cac:PartyName>
+      {legal}
+    </cac:Party>
+  </cac:AccountingSupplierParty>
+  <cac:PaymentMeans>
+    <cac:PayeeFinancialAccount><cbc:ID>{v["iban"]}</cbc:ID></cac:PayeeFinancialAccount>
+  </cac:PaymentMeans>
+  <cac:TaxTotal><cbc:TaxAmount currencyID="{v["currency"]}">{v["vat"]}</cbc:TaxAmount></cac:TaxTotal>
+  <cac:LegalMonetaryTotal>
+    <cbc:TaxExclusiveAmount currencyID="{v["currency"]}">{v["net"]}</cbc:TaxExclusiveAmount>
+    <cbc:TaxInclusiveAmount currencyID="{v["currency"]}">{v["gross"]}</cbc:TaxInclusiveAmount>
+  </cac:LegalMonetaryTotal>
+</Invoice>
+""".encode("utf-8")
+
+
+def _invoice_lines(v) -> List[Tuple[float, float, str]]:
+    return [
+        (50, 780, v["supplier"]),
+        (50, 740, f"Invoice {v['invoice_no']}"),
+        (50, 720, f"Date {v['invoice_date']}"),
+        (50, 700, f"Net {v['net']} {v['currency']}"),
+        (50, 680, f"VAT {v['vat']} {v['currency']}"),
+        (50, 660, f"Total {v['gross']} {v['currency']}"),
+        (50, 640, f"IBAN {v['iban']}"),
+    ]
+
+
+def write_samples(folder) -> List["Path"]:
+    """Write a digital PDF, a ZUGFeRD PDF, an XRechnung XML and a PNG scan into `folder`."""
+    from pathlib import Path
+
+    from PIL import Image, ImageDraw
+
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    pdf = make_pdf([_invoice_lines(SAMPLE)])
+    paths = [folder / "digital.pdf", folder / "zugferd.pdf", folder / "xrechnung.xml", folder / "scan.png"]
+    paths[0].write_bytes(pdf)
+    paths[1].write_bytes(add_attachment(pdf, "factur-x.xml", cii_xml()))
+    paths[2].write_bytes(ubl_xml())
+    img = Image.new("RGB", (800, 600), "white")
+    draw = ImageDraw.Draw(img)
+    for i, (_, _, text) in enumerate(_invoice_lines(SAMPLE)):
+        draw.text((40, 40 + 30 * i), text, fill="black")
+    img.save(paths[3])
+    return paths

@@ -7,8 +7,8 @@
 
 - [x] 1 Scaffold, errors, config
 - [x] 2 Columns, templates, result types
-- [ ] 3 PDF text, boxes, rendering
-- [ ] 4 Type detection, e-invoice XML
+- [x] 3 PDF text, boxes, rendering
+- [x] 4 Type detection, e-invoice XML
 - [ ] 5 Normalization, checks
 - [ ] 6 LLM calls, fake server
 - [ ] 7 Pipeline
