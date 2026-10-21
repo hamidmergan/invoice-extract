@@ -167,31 +167,43 @@ def _extract(path: PathLike, columns: List[Column], settings: Settings, client: 
 def extract(path: PathLike, columns: Optional[List[Column]] = None, *, base_url: Optional[str] = None,
             model: Optional[str] = None, api_key: Optional[str] = None, vision_model: Optional[str] = None,
             client: Optional[openai.OpenAI] = None, **limits) -> Row:
-    """One invoice as a Row. Raises InvoiceError subclasses."""
+    """One invoice as a Row. Without columns, every field the model finds. Raises InvoiceError subclasses."""
     settings = _settings(base_url, model, vision_model, api_key, limits)
-    return _extract(path, list(columns or STANDARD_COLUMNS), settings, _lazy_client(settings, client))
+    if columns is None:
+        from .discover import discover_file  # discover builds on this module
+        return discover_file(path, settings, _lazy_client(settings, client))
+    return _extract(path, list(columns), settings, _lazy_client(settings, client))
 
 
 def extract_many(paths: Sequence[PathLike], columns: Optional[List[Column]] = None, *,
                  base_url: Optional[str] = None, model: Optional[str] = None, api_key: Optional[str] = None,
                  vision_model: Optional[str] = None, client: Optional[openai.OpenAI] = None,
                  **limits) -> List[Row]:
-    """One Row per path, in input order. A failing file becomes a Row with `error` set."""
+    """One Row per path, in input order. A failing file becomes a Row with `error` set.
+
+    Without columns, every field the model finds is kept and fields are merged across the invoices;
+    `fields_of(rows)` lists them.
+    """
+    from .discover import discover_file, merge_rows  # discover builds on this module
     settings = _settings(base_url, model, vision_model, api_key, limits)
     paths = list(paths)
     if len(paths) > settings.max_files:
         raise LimitError(f"{len(paths)} files given, the limit is {settings.max_files} (raise it with --max-files)")
-    columns = list(columns or STANDARD_COLUMNS)
     get_client = _lazy_client(settings, client)
 
     def one(path: PathLike) -> Row:
         try:
-            return _extract(path, columns, settings, get_client)
+            if columns is None:
+                return discover_file(path, settings, get_client)
+            return _extract(path, list(columns), settings, get_client)
         except Exception as e:  # one broken file must not stop the batch
             return Row(path=str(path), error=f"{type(e).__name__}: {e}")
 
     with ThreadPoolExecutor(settings.concurrency) as pool:
-        return list(pool.map(one, paths))
+        rows = list(pool.map(one, paths))
+    if columns is None:
+        merge_rows(rows, settings, get_client)
+    return rows
 
 
 def add_columns(row: Row, columns: List[Column], *, base_url: Optional[str] = None, model: Optional[str] = None,

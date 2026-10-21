@@ -39,7 +39,7 @@ PDF_REPLY = {
 def test_zugferd_no_model_no_requests(tmp_path, server):
     paths = write_samples(tmp_path)
     for path in (paths[1], paths[2]):
-        row = extract(path)
+        row = extract(path, STANDARD_COLUMNS)
         assert row.status == "ok", row.to_dict()
         assert row.cells["gross"].value == Decimal("119.00")
         assert row.cells["gross"].source == "xml"
@@ -61,7 +61,7 @@ def test_zugferd_custom_column_uses_llm(tmp_path, server):
 def test_pdf_flow_values_and_boxes(tmp_path, server):
     paths = write_samples(tmp_path)
     server.reply = lambda body: json.dumps(PDF_REPLY)
-    row = extract(paths[0], **llm(server))
+    row = extract(paths[0], STANDARD_COLUMNS, **llm(server))
     assert row.kind == "pdf"
     assert "<!-- page 1 -->" in user_content(server.requests[0]["body"])
     cell = row.cells["invoice_no"]
@@ -75,7 +75,7 @@ def test_pdf_flow_values_and_boxes(tmp_path, server):
 def test_pdf_source_not_located_warning(tmp_path, server):
     paths = write_samples(tmp_path)
     server.reply = lambda body: json.dumps({"invoice_no": {"value": "XX-999", "source_text": "NOPE", "page": 1}})
-    row = extract(paths[0], **llm(server))
+    row = extract(paths[0], STANDARD_COLUMNS, **llm(server))
     cell = row.cells["invoice_no"]
     assert cell.box is None
     assert [c.name for c in cell.checks] == ["source_not_located"]
@@ -93,7 +93,7 @@ def test_scan_flow(tmp_path, server):
         return json.dumps({"invoice_no": {"value": "R-9", "source_text": "R-9", "page": 1}})
 
     server.reply = reply
-    row = extract(paths[3], **llm(server))
+    row = extract(paths[3], STANDARD_COLUMNS, **llm(server))
     assert row.kind == "scan"
     cell = row.cells["invoice_no"]
     assert cell.value == "R-9"
@@ -110,7 +110,7 @@ def test_extract_many_isolates_errors(tmp_path, server):
     empty = tmp_path / "empty.pdf"
     empty.write_bytes(b"")
     server.reply = lambda body: json.dumps(PDF_REPLY)
-    rows = extract_many([good, broken, empty], **llm(server))
+    rows = extract_many([good, broken, empty], STANDARD_COLUMNS, **llm(server))
     assert [r.path for r in rows] == [str(good), str(broken), str(empty)]
     assert rows[0].error is None
     assert rows[1].error and rows[2].error
@@ -128,7 +128,7 @@ def test_extract_many_limit(tmp_path, server):
 def test_add_columns_keeps_edits(tmp_path, server):
     paths = write_samples(tmp_path)
     server.reply = lambda body: json.dumps(PDF_REPLY)
-    row = extract(paths[0], **llm(server))
+    row = extract(paths[0], STANDARD_COLUMNS, **llm(server))
     row.cells["supplier"].value = "Edited Ltd"
     row.cells["supplier"].edited = True
 
@@ -175,7 +175,52 @@ def test_pdf_box_falls_back_to_the_value_in_tables(tmp_path, server):
     pdf.write_bytes(make_pdf([[(50, 780, "ACME GmbH Invoice RE-7"), (50, 700, "Nettobetrag"), (300, 700, "USt-Betrag"),
                                (50, 680, "100,00 EUR"), (300, 680, "19,00 EUR")]]))
     server.reply = lambda body: json.dumps({"net": {"value": 100.0, "source_text": "Nettobetrag 100,00 EUR", "page": 1}})
-    row = extract(pdf, **llm(server))
+    row = extract(pdf, STANDARD_COLUMNS, **llm(server))
     cell = row.cells["net"]
     assert cell.box is not None and cell.box.page == 1
     assert cell.checks == []
+
+
+def test_extract_many_discovers_and_merges(tmp_path, server):
+    from pdfgen import make_pdf
+    from invoice_extract import fields_of
+    a, b = tmp_path / "a.pdf", tmp_path / "b.pdf"
+    a.write_bytes(make_pdf([[(50, 780, "ACME GmbH Invoice RE-1 Total 119,00 EUR"), (50, 700, "Kd.-Nr. 4711")]]))
+    b.write_bytes(make_pdf([[(50, 780, "Beta Ltd Invoice B-7 Total 50,00 EUR"), (50, 700, "Customer number 4712")]]))
+
+    def reply(body):
+        if system_prompt(body).startswith("You get labels"):
+            return json.dumps({"mapping": {"Kd.-Nr.": "Customer No.", "Customer number": "Customer No."}})
+        if "Kd.-Nr. 4711" in user_content(body):
+            item = {"label": "Kd.-Nr.", "kind": "value", "value": "4711", "source_text": "Kd.-Nr. 4711", "page": 1}
+        else:
+            item = {"label": "Customer number", "kind": "value", "value": "4712",
+                    "source_text": "Customer number 4712", "page": 1}
+        return json.dumps({"items": [item]})
+    server.reply = reply
+    rows = extract_many([a, b], **llm(server))
+    assert [f.label for f in fields_of(rows)] == ["Customer No."]
+    assert [r.cells["customer_no"].value for r in rows] == ["4711", "4712"]
+    assert rows[0].cells["customer_no"].box is not None
+
+
+def test_einvoices_only_template_mode_no_requests(tmp_path, server):  # Review Focus 5
+    from invoice_extract import Template
+    paths = write_samples(tmp_path)
+    cols = Template.loads("columns:\n  - label: Supplier\n  - label: Gross\n    type: amount\n").columns
+    rows = extract_many([paths[1], paths[2]], cols)
+    assert [r.status for r in rows] == ["ok", "ok"]
+    assert server.requests == []
+
+
+def test_template_mode_text_and_table(tmp_path, server):
+    from invoice_extract import Column
+    pdf = write_samples(tmp_path)[0]
+    server.reply = lambda body: json.dumps({
+        "note": {"text": "Thank you.", "source_text": "Thank", "end_text": "you.", "page": 1},
+        "lines": {"rows": [["Paper", "100,00"]], "source_text": "Paper", "page": 1}})
+    cols = [Column("note", "Note", kind="text"),
+            Column("lines", "Line Items", kind="table", table_columns=["Description", "Amount"])]
+    row = extract_many([pdf], cols, **llm(server))[0]
+    assert row.cells["note"].kind == "text" and row.cells["note"].value == "Thank you."
+    assert row.cells["lines"].value == [{"Description": "Paper", "Amount": "100,00"}]
