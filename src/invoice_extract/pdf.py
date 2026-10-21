@@ -190,6 +190,22 @@ def locate(path: PathLike, source_text: str, page: Optional[int] = None) -> Opti
         doc.close()
 
 
+def union_box(a: Box, b: Box) -> Box:
+    """The smallest box covering both (same page)."""
+    return Box(a.page, min(a.x0, b.x0), min(a.y0, b.y0), max(a.x1, b.x1), max(a.y1, b.y1))
+
+
+def locate_span(path: PathLike, start: str, end: str, page: Optional[int] = None) -> Optional[Box]:
+    """The box from `start` to `end`, e.g. the first and last words of a text block or table."""
+    first = locate(path, start, page)
+    if first is None or not end.strip():
+        return first
+    last = locate(path, end, first.page)
+    if last is None or last.page != first.page or last.y1 < first.y0:
+        return first
+    return union_box(first, last)
+
+
 def click_hint(segs: List[Segment], index: int) -> str:
     """Describe a clicked value by its label: left on the same line, else directly above."""
     value = segs[index]

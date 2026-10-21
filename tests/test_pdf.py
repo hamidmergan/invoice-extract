@@ -84,3 +84,9 @@ def test_pdf_helpers_are_thread_safe(tmp_path):
                           timeout=120)
     assert proc.returncode == 0, proc.stderr[-2000:]
     assert proc.stdout.strip() == "20"
+
+
+def test_union_box():
+    from invoice_extract.pdf import union_box
+    from invoice_extract.results import Box
+    assert union_box(Box(1, 0.1, 0.2, 0.3, 0.4), Box(1, 0.2, 0.1, 0.5, 0.3)) == Box(1, 0.1, 0.1, 0.5, 0.4)
