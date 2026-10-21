@@ -1,30 +1,33 @@
-"""Web API for the review UI: upload invoices, extract in the background, review, edit and export."""
+"""Web API for the review UI: upload invoices, let the model find the fields, pick fields, edit and export."""
 
 import copy
+import io
 import re
 import tempfile
 import threading
 import uuid
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Set
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from ..checks import run_checks
-from ..columns import RESERVED, STANDARD_COLUMNS, Column, Template, column
+from ..columns import RESERVED, Column, Template, export_columns
 from ..config import Settings
-from ..core import _extract, _fill, _lazy_client
+from ..core import _extract, _lazy_client
+from ..discover import discover_file, field_counts, fields_of, merge_rows, with_hints
 from ..errors import InvoiceError
-from ..export import FORMATS, export
+from ..export import FORMATS, export, table_csv_path
 from ..normalize import normalize
-from ..pdf import click_hint, page_count, render_page, segments
+from ..pdf import page_count, render_page
 from ..results import Cell, Check, Row
 
 STATIC = Path(__file__).parent / "static"
@@ -34,6 +37,8 @@ MEDIA_TYPES = {
     "json": "application/json",
 }
 _SUFFIX = re.compile(r"\.[a-z0-9]{1,10}")
+# Row checks that come from reading the file, not from the values; they survive a manual edit.
+_READ_CHECKS = ("role_conflict", "merge_failed", "discovery_failed")
 
 
 @dataclass
@@ -42,29 +47,24 @@ class FileEntry:
     name: str
     path: Path
     kind: str = ""
-    state: str = "pending"  # pending, running, queued (waits to fill new columns) or done
+    state: str = "pending"  # pending, running, merging (waits for the merge across invoices) or done
     row: Optional[Row] = None
 
 
 @dataclass
 class Workspace:
-    columns: List[Column] = field(default_factory=lambda: list(STANDARD_COLUMNS))
     files: Dict[str, FileEntry] = field(default_factory=dict)
     pngs: Dict[tuple, bytes] = field(default_factory=dict)
-    version: int = 0  # counts column changes, so a job knows it started with an outdated column list
+    mode: str = "discover"  # "discover": the model finds the fields; "template": fill the template's fields
+    template: List[Column] = field(default_factory=list)
+    fields: List[Column] = field(default_factory=list)
+    selected: Set[str] = field(default_factory=set)
+    generation: int = 0  # bumped when the mode changes or files are cleared; older job results are dropped
+    merging: bool = False
 
 
-class Source(BaseModel):
-    file_id: str
-    page: int
-    index: int
-
-
-class NewColumn(BaseModel):
-    label: str
-    hint: str = ""
-    type: str = "text"
-    source: Optional[Source] = Field(None, alias="from")
+class Selection(BaseModel):
+    keys: List[str]
 
 
 class CellEdit(BaseModel):
@@ -139,63 +139,74 @@ def create_app(settings: Settings, workdir: Optional[Path] = None,
             raise HTTPException(404, f"Unknown file id {file_id!r}")
         return entry
 
-    def extract_job(entry: FileEntry) -> None:
+    def finished_rows() -> List[Row]:
+        """Rows of finished files. Call under the lock."""
+        return [e.row for e in ws.files.values() if e.state == "done" and e.row is not None]
+
+    def extract_job(entry: FileEntry, generation: int) -> None:
         with lock:
+            if generation != ws.generation:
+                return
             entry.state = "running"
-            columns = list(ws.columns)
-            version = ws.version
+            mode, template = ws.mode, list(ws.template)
         try:
-            row = _extract(entry.path, columns, settings, get_client)
+            if mode == "discover":
+                row = discover_file(entry.path, settings, get_client)
+            else:
+                row = _extract(entry.path, template, settings, get_client)
         except Exception as e:  # one broken file must not stop the others
             row = Row(path=str(entry.path), error=f"{type(e).__name__}: {e}")
         if "file" in row.cells:
             row.cells["file"].value = entry.name
         with lock:
+            if generation != ws.generation:
+                return
             entry.kind = row.kind
             entry.row = row
-            finish(entry, version)
+            entry.state = "done" if mode == "template" else "merging"
+            start_merge()
 
-    def finish(entry: FileEntry, version: int) -> None:
-        """Mark a job done, or queue a fill when the columns changed while it ran. Call under the lock."""
-        if ws.version != version and entry.row is not None and not entry.row.error:
-            entry.state = "queued"
-            pool.submit(fill_job, entry)
-        else:
-            entry.state = "done"
+    def start_merge() -> None:
+        """Merge the waiting files once no file is being read any more. Call under the lock."""
+        if ws.mode != "discover" or ws.merging:
+            return
+        if any(e.state in ("pending", "running") for e in ws.files.values()):
+            return
+        batch = [e for e in ws.files.values() if e.state == "merging"]
+        if batch:
+            ws.merging = True
+            pool.submit(merge_job, batch, ws.generation)
 
-    def fill_job(entry: FileEntry) -> None:
+    def merge_job(batch: List[FileEntry], generation: int) -> None:
         with lock:
-            row = entry.row
-            if row is None or row.error:
-                entry.state = "done"
-                return
-            entry.state = "running"
-            version = ws.version
-            missing = [c for c in ws.columns if c.key not in row.cells and c.key not in RESERVED]
-        cells: Dict[str, Cell] = {}
-        failure: Optional[Check] = None
-        if missing:
-            try:
-                cells = _fill(row.path, row.kind, missing, settings, get_client)
-            except Exception as e:
-                failure = Check("fill", "error", f"Could not fill new columns: {type(e).__name__}: {e}")
+            known = list(ws.fields)
+        rows = [e.row for e in batch if e.row is not None]
+        try:
+            merge_rows(rows, settings, get_client, known)
+        except Exception:  # merging is best effort; the fields then stay as each invoice named them
+            for row in rows:
+                row.checks.append(Check("merge_failed", "warning", "Fields could not be merged across invoices"))
         with lock:
-            for key, cell in cells.items():
-                row.cells.setdefault(key, cell)  # a manual edit made meanwhile wins
-            row.checks = run_checks(row, ws.columns) + ([failure] if failure else [])
-            finish(entry, version)
+            ws.merging = False
+            if generation == ws.generation:
+                before = {c.key for c in ws.fields}
+                ws.fields = fields_of(finished_rows() + rows, known=ws.fields)
+                ws.selected |= {c.key for c in ws.fields if c.key not in before}
+                for entry in batch:
+                    entry.state = "done"
+            start_merge()
 
-    def refill_all() -> None:
-        """Columns changed: queue a fill for finished rows; running jobs see the new version when they end."""
-        with lock:
-            ws.version += 1
-            for entry in ws.files.values():
-                if entry.state == "done" and entry.row is not None and not entry.row.error:
-                    entry.state = "queued"
-                    pool.submit(fill_job, entry)
+    def rerun_all() -> None:
+        """Read every file again, e.g. after the mode changed. Call under the lock."""
+        ws.generation += 1
+        ws.merging = False
+        for entry in ws.files.values():
+            entry.state, entry.row = "pending", None
+            pool.submit(extract_job, entry, ws.generation)
 
-    def column_dict(col: Column) -> Dict[str, Any]:
-        return asdict(col)
+    def selected_fields() -> List[Column]:
+        """The selected fields in list order. Call under the lock."""
+        return [c for c in ws.fields if c.key in ws.selected]
 
     @app.get("/")
     def index() -> FileResponse:
@@ -218,9 +229,7 @@ def create_app(settings: Settings, workdir: Optional[Path] = None,
         with lock:
             for entry in entries:
                 ws.files[entry.id] = entry
-        for entry in entries:
-            pool.submit(extract_job, entry)
-        with lock:
+                pool.submit(extract_job, entry, ws.generation)
             return {"files": [_entry_dict(e) for e in entries]}
 
     @app.delete("/api/files")
@@ -229,6 +238,10 @@ def create_app(settings: Settings, workdir: Optional[Path] = None,
             entries = list(ws.files.values())
             ws.files.clear()
             ws.pngs.clear()
+            ws.generation += 1
+            ws.merging = False
+            if ws.mode == "discover":
+                ws.fields, ws.selected = [], set()
         for entry in entries:
             entry.path.unlink(missing_ok=True)
         return {"files": []}
@@ -237,10 +250,22 @@ def create_app(settings: Settings, workdir: Optional[Path] = None,
     def state() -> Dict[str, Any]:
         with lock:
             files = [_entry_dict(e) for e in ws.files.values()]
-            columns = [column_dict(c) for c in ws.columns]
+            counts = field_counts(finished_rows())
+            fields = [{**asdict(c), "selected": c.key in ws.selected, "count": counts.get(c.key, 0)}
+                      for c in ws.fields]
+            mode = ws.mode
         to_check = sum(1 for f in files if f["state"] == "done" and f["status"] in ("warning", "error"))
-        return {"columns": columns, "files": files,
-                "summary": {"files": len(files), "columns": len(columns), "to_check": to_check}}
+        summary = {"files": len(files), "fields": sum(1 for f in fields if f["selected"]), "to_check": to_check}
+        return {"mode": mode, "fields": fields, "files": files, "summary": summary}
+
+    @app.put("/api/selection")
+    def select(body: Selection) -> Dict[str, Any]:
+        with lock:
+            unknown = [k for k in body.keys if k not in {c.key for c in ws.fields}]
+            if unknown:
+                raise HTTPException(400, f"Unknown fields: {', '.join(unknown)}")
+            ws.selected = set(body.keys)
+            return {"selected": [c.key for c in selected_fields()]}
 
     @app.get("/api/files/{file_id}/pages")
     def pages(file_id: str) -> Dict[str, int]:
@@ -266,65 +291,27 @@ def create_app(settings: Settings, workdir: Optional[Path] = None,
                 ws.pngs[(file_id, n)] = png
         return Response(png, media_type="image/png")
 
-    @app.get("/api/files/{file_id}/pages/{n}/segments")
-    def page_segments(file_id: str, n: int) -> List[Dict[str, Any]]:
-        entry = entry_or_404(file_id)
-        try:
-            segs = segments(entry.path, n)
-        except (ValueError, InvoiceError, OSError) as e:
-            raise HTTPException(404, str(e))
-        return [{"index": i, "text": s.text, "box": asdict(s.box)} for i, s in enumerate(segs)]
-
-    @app.post("/api/columns")
-    def add_column(body: NewColumn) -> Dict[str, Any]:
-        hint = body.hint
-        if body.source is not None:
-            entry = entry_or_404(body.source.file_id)
-            try:
-                segs = segments(entry.path, body.source.page)
-                clicked = click_hint(segs, body.source.index)
-            except (ValueError, IndexError, InvoiceError, OSError) as e:
-                raise HTTPException(404, f"Unknown text segment: {e}")
-            hint = f"{hint} {clicked}".strip()
-        with lock:
-            try:
-                col = column(body.label, hint=hint, type=body.type, existing=[c.key for c in ws.columns])
-            except InvoiceError as e:
-                raise HTTPException(400, str(e))
-            # new columns go before a trailing Status column, as in the table people expect
-            at = len(ws.columns) - 1 if ws.columns and ws.columns[-1].key == "status" else len(ws.columns)
-            ws.columns.insert(at, col)
-        refill_all()
-        return column_dict(col)
-
-    @app.delete("/api/columns/{key}")
-    def delete_column(key: str) -> Dict[str, Any]:
-        with lock:
-            if not any(c.key == key for c in ws.columns):
-                raise HTTPException(404, f"Unknown column {key!r}")
-            ws.columns = [c for c in ws.columns if c.key != key]
-            for entry in ws.files.values():
-                if entry.state == "done" and entry.row is not None and not entry.row.error:
-                    entry.row.checks = run_checks(entry.row, ws.columns)
-        return {"deleted": key}
-
     @app.patch("/api/files/{file_id}/cells/{key}")
     def edit_cell(file_id: str, key: str, body: CellEdit) -> Dict[str, Any]:
         entry = entry_or_404(file_id)
         if key in RESERVED:
-            raise HTTPException(400, f"Column {key!r} cannot be edited")
+            raise HTTPException(400, f"Field {key!r} cannot be edited")
         with lock:
+            col = next((c for c in ws.fields if c.key == key), None)
+            if col is None:
+                raise HTTPException(404, f"Unknown field {key!r}")
+            if col.kind == "table":
+                raise HTTPException(400, "Tables cannot be edited")
             row = entry.row
-            if row is None or row.error:
-                raise HTTPException(409, "This file has no extracted values to edit")
-            col = next((c for c in ws.columns if c.key == key), None)
-            if col is None and key not in row.cells:
-                raise HTTPException(404, f"Unknown column {key!r}")
+            if entry.state != "done" or row is None or row.error:
+                raise HTTPException(409, "This file has no finished values to edit")
             old = row.cells.get(key, Cell())
-            value, checks = normalize(col.type if col else "text", body.value, "")
+            value, checks = normalize(col.type, body.value, "")
             row.cells[key] = Cell(value=value, raw=old.raw, page=old.page, box=old.box, source="manual",
-                                  edited=True, checks=checks)
-            row.checks = run_checks(row, ws.columns)
+                                  edited=True, checks=checks, kind=col.kind, label=col.label, role=col.role,
+                                  type=col.type)
+            kept = [c for c in row.checks if c.name in _READ_CHECKS]
+            row.checks = kept + run_checks(row, ws.template if ws.mode == "template" else [])
             return _entry_dict(entry)
 
     @app.get("/api/export")
@@ -338,9 +325,17 @@ def create_app(settings: Settings, workdir: Optional[Path] = None,
                     row = copy.copy(entry.row)
                     row.path = entry.name  # export names files by path
                     rows.append(row)
-            columns = list(ws.columns)
+            columns = export_columns(selected_fields())
+        tables = [c for c in columns if c.kind == "table"]
         with tempfile.TemporaryDirectory(prefix="invoice-extract-export-") as out:
             path = export(rows, Path(out) / f"invoices.{format}", columns, format)
+            if format == "csv" and tables:
+                buffer = io.BytesIO()
+                with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+                    for file in [path] + [table_csv_path(path, c) for c in tables]:
+                        archive.write(file, file.name)
+                return Response(buffer.getvalue(), media_type="application/zip",
+                                headers={"Content-Disposition": 'attachment; filename="invoices.zip"'})
             data = path.read_bytes()
         return Response(data, media_type=MEDIA_TYPES[format],
                         headers={"Content-Disposition": f'attachment; filename="invoices.{format}"'})
@@ -348,7 +343,7 @@ def create_app(settings: Settings, workdir: Optional[Path] = None,
     @app.get("/api/template")
     def get_template() -> Response:
         with lock:
-            text = Template("invoices", list(ws.columns)).dumps()
+            text = Template("invoices", with_hints(selected_fields(), finished_rows())).dumps()
         return Response(text, media_type="application/x-yaml",
                         headers={"Content-Disposition": 'attachment; filename="invoices.yaml"'})
 
@@ -359,9 +354,19 @@ def create_app(settings: Settings, workdir: Optional[Path] = None,
         except (InvoiceError, UnicodeDecodeError) as e:
             raise HTTPException(400, f"Invalid template: {e}")
         with lock:
-            ws.columns = list(template.columns)
-            columns = [column_dict(c) for c in ws.columns]
-        refill_all()
-        return {"columns": columns}
+            ws.mode = "template"
+            ws.template = list(template.columns)
+            ws.fields = [c for c in template.columns if c.key not in RESERVED]  # File and Status frame every export
+            ws.selected = {c.key for c in ws.fields}
+            rerun_all()
+            return {"mode": ws.mode, "fields": [asdict(c) for c in ws.fields]}
+
+    @app.delete("/api/template")
+    def drop_template() -> Dict[str, Any]:
+        with lock:
+            ws.mode = "discover"
+            ws.template, ws.fields, ws.selected = [], [], set()
+            rerun_all()
+            return {"mode": ws.mode}
 
     return app
