@@ -96,3 +96,14 @@ def test_vision_boxes_error_returns_empty(server):
     server.status = 200
     server.reply = lambda body: "no idea"
     assert vision_boxes(client_for(server), "m", b"png", {"invoice_no": "R-1"}, 1) == {}
+
+
+def test_fill_prompt_has_keyed_answer_skeleton(server):
+    # small models otherwise answer one unkeyed object per line
+    server.reply = answer()
+    fill_columns(client_for(server), "m", COLUMNS, TEXT)
+    content = server.requests[0]["body"]["messages"][-1]["content"]
+    start = content.index("Answer skeleton:\n") + len("Answer skeleton:\n")
+    skeleton = json.loads(content[start:content.index("\n", start)])
+    assert list(skeleton) == ["invoice_no", "gross"]
+    assert skeleton["gross"] == {"value": None, "source_text": "", "page": None}

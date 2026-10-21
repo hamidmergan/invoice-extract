@@ -83,7 +83,11 @@ def fill_columns(client: openai.OpenAI, model: str, columns: List[Column], text:
     """Ask the model for every non-reserved column. Missing keys become None."""
     wanted = [c for c in columns if c.key not in RESERVED]
     spec = [{"key": c.key, "label": c.label, "hint": c.hint, "type": c.type} for c in wanted]
-    user = "Columns:\n" + json.dumps(spec, ensure_ascii=False) + "\n\nInvoice text:\n" + text
+    skeleton = {c.key: {"value": None, "source_text": "", "page": None} for c in wanted}
+    user = ("Columns:\n" + json.dumps(spec, ensure_ascii=False)
+            + "\n\nFill in this object and answer with it. Keep every key; a value that is not printed stays null.\n"
+            + "Answer skeleton:\n" + json.dumps(skeleton, ensure_ascii=False)
+            + "\n\nInvoice text:\n" + text)
     data = _json_object(_chat(client, model, FILL_PROMPT, user))
     return {c.key: _field(data.get(c.key)) for c in wanted}
 
