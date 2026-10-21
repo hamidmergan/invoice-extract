@@ -1,5 +1,6 @@
 """Turn the invoices you received into one checked table."""
 
+from .checks import duplicate_checks
 from .columns import KINDS, ROLES, STANDARD_COLUMNS, Column, Template, column, export_columns, role_column
 from .config import Settings, resolve
 from .core import add_columns, extract, extract_many
@@ -27,6 +28,7 @@ __all__ = [
     "UnsupportedFileError",
     "add_columns",
     "column",
+    "duplicate_checks",
     "export",
     "export_columns",
     "extract",

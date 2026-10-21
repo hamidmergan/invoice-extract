@@ -9,7 +9,7 @@ import doc_extract
 import openai
 
 from .cells import cell_from_item
-from .checks import run_checks
+from .checks import duplicate_checks, run_checks
 from .columns import RESERVED, STANDARD_COLUMNS, Column
 from .config import Settings, resolve
 from .detect import detect, embedded_xml
@@ -198,7 +198,9 @@ def extract_many(paths: Sequence[PathLike], columns: Optional[List[Column]] = No
             return Row(path=str(path), error=f"{type(e).__name__}: {e}")
 
     with ThreadPoolExecutor(settings.concurrency) as pool:
-        return list(pool.map(one, paths))
+        rows = list(pool.map(one, paths))
+    duplicate_checks(rows, wanted)
+    return rows
 
 
 def add_columns(row: Row, columns: List[Column], *, base_url: Optional[str] = None, model: Optional[str] = None,

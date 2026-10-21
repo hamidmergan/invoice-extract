@@ -120,6 +120,16 @@ def test_extract_many_isolates_errors(tmp_path, server):
     assert all(r.status == "error" for r in rows[1:])
 
 
+def test_extract_many_marks_duplicates(tmp_path, server):
+    xml = write_samples(tmp_path)[2]
+    twin = tmp_path / "again.xml"
+    twin.write_bytes(xml.read_bytes())
+    rows = extract_many([xml, twin])
+    assert [r.status for r in rows] == ["warning", "warning"]
+    assert [c.message for c in rows[0].checks if c.name == "duplicate"] == ["Same invoice number as again.xml"]
+    assert server.requests == []
+
+
 def test_extract_many_limit(tmp_path, server):
     paths = write_samples(tmp_path)[:3]
     with pytest.raises(LimitError):
