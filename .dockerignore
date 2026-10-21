@@ -1,0 +1,13 @@
+.git
+tests
+samples
+docs
+__pycache__
+.DS_Store
+.venv
+.superpowers
+.pytest_cache
+dist
+build
+*.egg-info
+PLAN.md
