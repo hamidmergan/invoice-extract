@@ -1,6 +1,11 @@
 # invoice-extract
 
-A lightweight Python tool that turns a pile of invoices into one table. You upload invoices, a language model of your choice finds everything on them (values, text blocks and tables such as the line items), and you only pick what goes into the export. Fields that mean the same thing on different invoices are merged into one column, and each value comes with the place on the page where it was found. E-invoices are read straight from their XML, without a model. The result is an Excel, CSV or JSON file.
+A lightweight Python tool for invoices, with a language model of your choice:
+
+- **Normal invoices to e-invoices:** a PDF, scan or photo goes in, a valid **XRechnung** or **ZUGFeRD** comes out. The model reads every field an EN 16931 e-invoice needs, you check and complete them next to the page, and nothing invalid is written.
+- **Invoices to one table:** many invoices become one Excel, CSV or JSON file.
+
+For the table, you upload invoices, a language model of your choice finds everything on them (values, text blocks and tables such as the line items), and you only pick what goes into the export. Fields that mean the same thing on different invoices are merged into one column, and each value comes with the place on the page where it was found. E-invoices are read straight from their XML, without a model. The result is an Excel, CSV or JSON file.
 
 invoice-extract currently supports:
 
@@ -40,13 +45,71 @@ pip install ".[ui]"
 
 ## Usage
 
-### Web UI
+### E-invoices (XRechnung / ZUGFeRD)
+
+German companies must receive e-invoices since 2025 and send them from 2027/2028. invoice-extract turns a normal invoice into one:
 
 ```bash
 invoice-extract serve --base-url http://localhost:11434/v1 --model your-model
 ```
 
-Then open http://127.0.0.1:8000 and drop your invoices onto the page.
+Open http://127.0.0.1:8000 and drop your invoices onto the page.
+
+- **Read:** the model reads seller, buyer, number, dates, service period, payment (transfer or direct debit with mandate and creditor ID), the lines and the totals. Each read value has a box on the page.
+- **Check:** the form on the right shows every field. Problems are listed on top and marked at the field, with the rule they come from (EN 16931 or the German XRechnung rules BR-DE). Lines and totals are recomputed from what you type, and the printed totals are compared with them.
+- **Your company:** "My company" stores your own seller data (address, VAT ID, contact person, phone, e-mail, IBAN). It replaces the seller fields read from your invoices and fills what is rarely printed. Save it as YAML and load it next time.
+- **Write:** choose **XRechnung** (CII XML) or **ZUGFeRD** (the original PDF with the same XML embedded; a scan or photo is turned into a PDF first). "Download" stays disabled until the invoice is valid for the chosen format.
+
+From the command line:
+
+```bash
+invoice-extract einvoice invoice.pdf scan.jpg --format xrechnung --profile company.yaml -o out/ \
+  --base-url http://localhost:11434/v1 --model your-model
+```
+
+Valid invoices are written as `<name>.xml` (XRechnung) or `<name>-zugferd.pdf` (ZUGFeRD); for the others the problems are listed. The exit code is 1 if any file could not be written. A company profile looks like this:
+
+```yaml
+seller:
+  name: My Shop GmbH
+  street: Main Street 1
+  postcode: "12345"
+  city: Berlin
+  country: DE
+  vat_id: DE123456789
+  contact_name: Jane Doe
+  phone: "+49 30 123456"
+  email: billing@example.com
+iban: DE89370400440532013000
+payment_terms: Payable within 14 days.
+```
+
+From Python:
+
+```python
+from invoice_extract.einvoicing import convert_many, write
+
+for conversion in convert_many(["invoice.pdf"], base_url=..., model=...):
+    problems = [i for i in conversion.issues("xrechnung") if i.level == "error"]
+    if not problems:
+        write(conversion, "xrechnung", "out/")
+```
+
+Good to know:
+
+- XRechnung asks for more than most printed invoices show: a buyer reference (Leitweg-ID, or any reference agreed with the buyer), a seller contact person, phone and e-mail, and the buyer's e-mail address. ZUGFeRD (EN 16931) shows these as warnings only.
+- The XML follows EN 16931 in the CII syntax and was checked with the official KoSIT validator (XRechnung 3.0.2 configuration). For your own invoices, you can check the files the same way: [KoSIT validator](https://github.com/itplr-kosit/validator).
+- A ZUGFeRD PDF contains a valid XML, but the PDF itself is only as PDF/A-3 conform as your source PDF.
+- Not supported yet: allowances and charges, prepayments, other currencies than the one on the invoice, UBL output.
+- An invoice that already is an e-invoice is reported as such and not converted.
+
+### Web UI (table)
+
+```bash
+invoice-extract serve --base-url http://localhost:11434/v1 --model your-model
+```
+
+Then open http://127.0.0.1:8000/table and drop your invoices onto the page.
 
 - On the left you see every field the model found in all invoices, grouped into values, text blocks and tables, with a count such as "6/10" (found in 6 of 10 invoices). Everything starts ticked. Untick what you do not need.
 - On the right you see the current invoice with a coloured box around every field. Unticked fields stay visible but faded. Flip through the invoices with ‹ › or the arrow keys, and click a field name to jump to its box.

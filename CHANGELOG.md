@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/) and the proje
 
 ### Added
 
+- Normal invoices to e-invoices: PDF, scan or photo in, valid XRechnung (CII XML) or ZUGFeRD (PDF with embedded XML) out; EN 16931 and XRechnung rule checks, company profile, review form in the web UI, `invoice-extract einvoice` command
 - One table from many invoices: ZUGFeRD/Factur-X, XRechnung (UBL and CII), digital PDFs, scans and photos
 - The model finds every value, text block and table on each invoice and names it; fields that mean the same thing on different invoices are merged into one column
 - Pick the fields to export; save the selection as a YAML template so later invoices are sorted into the same fields
