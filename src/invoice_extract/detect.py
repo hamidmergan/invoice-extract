@@ -5,7 +5,8 @@ from typing import Optional
 
 from .config import Settings
 from .errors import LimitError, UnsupportedFileError
-from .pdf import PathLike, _is_pdf, _open_pdf, serialized, text_pages
+from .einvoice import parse_xml
+from .pdf import PathLike, _is_pdf, _open_pdf, page_count, serialized, text_pages
 
 SUFFIXES = {".pdf", ".xml", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 EMBEDDED_NAMES = {"factur-x.xml", "zugferd-invoice.xml", "xrechnung.xml", "zugferd.xml"}
@@ -28,6 +29,14 @@ def embedded_xml(path: PathLike) -> Optional[bytes]:
         doc.close()
 
 
+def _readable(xml: bytes) -> bool:
+    try:
+        parse_xml(xml)
+        return True
+    except UnsupportedFileError:
+        return False
+
+
 def detect(path: PathLike, settings: Settings) -> str:
     """Return "xml", "zugferd", "pdf" or "scan" for a supported invoice file."""
     path = Path(path)
@@ -47,10 +56,14 @@ def detect(path: PathLike, settings: Settings) -> str:
         return "xml"
     if not _is_pdf(path):
         return "scan"
-    if embedded_xml(path) is not None:
-        return "zugferd"
-    pages = text_pages(path)
-    chars = sum(len("".join(text.split())) for text in pages)
-    if pages and chars / len(pages) >= MIN_CHARS_PER_PAGE:
+    pages = page_count(path)
+    if pages > settings.max_pages:
+        raise LimitError(f"{path.name} has {pages} pages, the limit is {settings.max_pages} (raise it with --max-pages)")
+    xml = embedded_xml(path)
+    if xml is not None and _readable(xml):
+        return "zugferd"  # other attachments (e.g. ZUGFeRD 1.0) fall back to the text layer or a scan
+    texts = text_pages(path)
+    chars = sum(len("".join(text.split())) for text in texts)
+    if texts and chars / len(texts) >= MIN_CHARS_PER_PAGE:
         return "pdf"
     return "scan"

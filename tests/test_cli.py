@@ -83,3 +83,23 @@ def test_default_output_not_overwritten(tmp_path, server, monkeypatch, capsys):
     assert (tmp_path / "invoices (1).xlsx").exists()
     assert main([str(xml)]) == 0
     assert (tmp_path / "invoices (2).xlsx").exists()
+
+
+def test_cli_missing_output_folder_fails_before_processing(tmp_path, server, capsys):
+    pdf = write_samples(tmp_path)[0]
+    out = tmp_path / "missing" / "out.xlsx"
+    assert main([str(pdf), "-o", str(out)] + llm_flags(server)) == 2
+    assert "Error: Output folder does not exist" in capsys.readouterr().err
+    assert server.requests == []
+
+
+def test_cli_serve_guards_host_on_loopback(monkeypatch):
+    import types
+
+    from fastapi.testclient import TestClient
+    started = {}
+    monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=lambda app, **kw: started.update(app=app)))
+    assert main(["serve"]) == 0
+    client = TestClient(started["app"], base_url="http://127.0.0.1:8000")
+    assert client.get("/api/state").status_code == 200
+    assert client.get("/api/state", headers={"Host": "evil.example"}).status_code == 400

@@ -9,10 +9,11 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
+from urllib.parse import urlsplit
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -41,7 +42,7 @@ class FileEntry:
     name: str
     path: Path
     kind: str = ""
-    state: str = "pending"
+    state: str = "pending"  # pending, running, queued (waits to fill new columns) or done
     row: Optional[Row] = None
 
 
@@ -50,6 +51,7 @@ class Workspace:
     columns: List[Column] = field(default_factory=lambda: list(STANDARD_COLUMNS))
     files: Dict[str, FileEntry] = field(default_factory=dict)
     pngs: Dict[tuple, bytes] = field(default_factory=dict)
+    version: int = 0  # counts column changes, so a job knows it started with an outdated column list
 
 
 class Source(BaseModel):
@@ -83,13 +85,23 @@ def _entry_dict(entry: FileEntry) -> Dict[str, Any]:
             "row": _row_dict(entry)}
 
 
+def _hostname(host: str) -> str:
+    if host.startswith("["):
+        return host[1:host.find("]")].lower()
+    return host.rsplit(":", 1)[0].lower() if host.count(":") == 1 else host.lower()
+
+
 def _suffix(name: str) -> str:
     suffix = Path(name).suffix.lower()
     return suffix if _SUFFIX.fullmatch(suffix) else ""
 
 
-def create_app(settings: Settings, workdir: Optional[Path] = None) -> FastAPI:
-    """The review UI and its JSON API, with one in-memory workspace."""
+def create_app(settings: Settings, workdir: Optional[Path] = None,
+               allowed_hosts: Optional[Sequence[str]] = None) -> FastAPI:
+    """The review UI and its JSON API, with one in-memory workspace.
+
+    `allowed_hosts` limits the Host header (against DNS rebinding); requests from another origin are always refused.
+    """
     tmp = None if workdir is not None else tempfile.TemporaryDirectory(prefix="invoice-extract-")
     uploads = Path(workdir) if workdir is not None else Path(tmp.name)
     uploads.mkdir(parents=True, exist_ok=True)
@@ -107,6 +119,18 @@ def create_app(settings: Settings, workdir: Optional[Path] = None) -> FastAPI:
 
     app = FastAPI(title="invoice-extract", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
+    hosts = {h.lower() for h in allowed_hosts} if allowed_hosts is not None else None
+
+    @app.middleware("http")
+    async def guard(request: Request, call_next):
+        host = request.headers.get("host", "")
+        if hosts is not None and _hostname(host) not in hosts:
+            return PlainTextResponse("Unknown host", status_code=400)
+        origin = request.headers.get("origin")
+        own = {host.lower(), request.headers.get("x-forwarded-host", "").lower()}  # also behind a reverse proxy
+        if origin is not None and urlsplit(origin).netloc.lower() not in own:
+            return PlainTextResponse("Cross-origin requests are not allowed", status_code=403)
+        return await call_next(request)
 
     def entry_or_404(file_id: str) -> FileEntry:
         with lock:
@@ -119,6 +143,7 @@ def create_app(settings: Settings, workdir: Optional[Path] = None) -> FastAPI:
         with lock:
             entry.state = "running"
             columns = list(ws.columns)
+            version = ws.version
         try:
             row = _extract(entry.path, columns, settings, get_client)
         except Exception as e:  # one broken file must not stop the others
@@ -128,14 +153,24 @@ def create_app(settings: Settings, workdir: Optional[Path] = None) -> FastAPI:
         with lock:
             entry.kind = row.kind
             entry.row = row
+            finish(entry, version)
+
+    def finish(entry: FileEntry, version: int) -> None:
+        """Mark a job done, or queue a fill when the columns changed while it ran. Call under the lock."""
+        if ws.version != version and entry.row is not None and not entry.row.error:
+            entry.state = "queued"
+            pool.submit(fill_job, entry)
+        else:
             entry.state = "done"
 
     def fill_job(entry: FileEntry) -> None:
         with lock:
             row = entry.row
             if row is None or row.error:
+                entry.state = "done"
                 return
             entry.state = "running"
+            version = ws.version
             missing = [c for c in ws.columns if c.key not in row.cells and c.key not in RESERVED]
         cells: Dict[str, Cell] = {}
         failure: Optional[Check] = None
@@ -145,15 +180,19 @@ def create_app(settings: Settings, workdir: Optional[Path] = None) -> FastAPI:
             except Exception as e:
                 failure = Check("fill", "error", f"Could not fill new columns: {type(e).__name__}: {e}")
         with lock:
-            row.cells.update(cells)
+            for key, cell in cells.items():
+                row.cells.setdefault(key, cell)  # a manual edit made meanwhile wins
             row.checks = run_checks(row, ws.columns) + ([failure] if failure else [])
-            entry.state = "done"
+            finish(entry, version)
 
     def refill_all() -> None:
+        """Columns changed: queue a fill for finished rows; running jobs see the new version when they end."""
         with lock:
-            entries = [e for e in ws.files.values() if e.state == "done"]
-        for entry in entries:
-            pool.submit(fill_job, entry)
+            ws.version += 1
+            for entry in ws.files.values():
+                if entry.state == "done" and entry.row is not None and not entry.row.error:
+                    entry.state = "queued"
+                    pool.submit(fill_job, entry)
 
     def column_dict(col: Column) -> Dict[str, Any]:
         return asdict(col)

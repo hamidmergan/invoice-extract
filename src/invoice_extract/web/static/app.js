@@ -96,7 +96,7 @@ function display(value) {
 }
 
 function statusText(file) {
-  if (file.state !== "done") return "reading…";
+  if (file.state !== "done") return file.row ? "filling new columns…" : "reading…";
   const row = file.row;
   if (row.error) return row.error;
   const issues = row.checks.filter((c) => c.level !== "ok");
@@ -139,7 +139,7 @@ function renderColumns() {
 function renderValues() {
   const list = $("values");
   const file = selectedFile();
-  if (!file || file.state !== "done" || file.row.error) {
+  if (!file || !file.row || file.row.error) {
     list.replaceChildren(el("dd", { class: "muted" }, file ? statusText(file) : "No file selected"));
     return;
   }
@@ -161,7 +161,7 @@ function renderChecks() {
   const list = $("checks");
   const file = selectedFile();
   const checks = [];
-  if (file && file.state === "done") {
+  if (file && file.row) {
     if (file.row.error) checks.push({ level: "error", message: file.row.error });
     else {
       checks.push(...file.row.checks);

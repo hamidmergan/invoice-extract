@@ -1,5 +1,6 @@
 import io
 import json
+import threading
 import time
 
 import openpyxl
@@ -188,3 +189,72 @@ def test_index_served(server):
         assert "<title>invoice-extract</title>" in res.text
         assert client.get("/static/app.js").status_code == 200
         assert client.get("/static/style.css").status_code == 200
+
+
+def wait_for(predicate, client, timeout=10.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        files = client.get("/api/state").json()["files"]
+        if predicate(files):
+            return files
+        time.sleep(0.05)
+    raise AssertionError("condition not reached in time")
+
+
+def gated_reply(gate):
+    def reply(body):
+        gate.wait(5)
+        return json.dumps({"customer_no": {"value": "40711", "source_text": "40711", "page": 1}})
+    return reply
+
+
+def test_add_column_while_busy(tmp_path, server):
+    xml = write_samples(tmp_path)[2]
+    pdf = tmp_path / "click.pdf"
+    pdf.write_bytes(make_pdf([[(50, 780, "ACME GmbH"), (50, 700, "Kd.-Nr."), (120, 700, "40711")]]))
+    gate = threading.Event()
+    server.reply = gated_reply(gate)
+    with client_for(resolve(base_url=server.base_url, model="m", concurrency=1)) as client:
+        upload(client, xml)
+        wait_done(client)
+        upload(client, pdf)
+        wait_for(lambda files: len(server.requests) > 0, client)
+        assert client.post("/api/columns", json={"label": "Customer No."}).status_code == 200
+        states = {f["name"]: f["state"] for f in client.get("/api/state").json()["files"]}
+        assert states["xrechnung.xml"] != "done"  # queued at once, so the UI keeps polling
+        gate.set()
+        files = wait_for(lambda files: all(f["state"] == "done" and "customer_no" in f["row"]["cells"]
+                                           for f in files), client)
+    assert {f["name"]: f["row"]["cells"]["customer_no"]["value"] for f in files} == {
+        "xrechnung.xml": "40711", "click.pdf": "40711"}
+
+
+def test_manual_edit_survives_refill(tmp_path, server):
+    xml = write_samples(tmp_path)[2]
+    gate = threading.Event()
+    server.reply = gated_reply(gate)
+    with client_for(resolve(base_url=server.base_url, model="m")) as client:
+        file_id = upload(client, xml).json()["files"][0]["id"]
+        wait_done(client)
+        client.post("/api/columns", json={"label": "Customer No."})
+        wait_for(lambda files: len(server.requests) > 0, client)
+        assert client.patch(f"/api/files/{file_id}/cells/customer_no", json={"value": "MANUAL"}).status_code == 200
+        gate.set()
+        cell = wait_done(client)["files"][0]["row"]["cells"]["customer_no"]
+    assert cell["value"] == "MANUAL"
+    assert cell["edited"] is True
+
+
+def test_host_and_origin_guard(server):
+    app = create_app(resolve(), allowed_hosts=["127.0.0.1", "localhost", "::1"])
+    with TestClient(app, base_url="http://127.0.0.1:8000") as client:
+        assert client.get("/api/state").status_code == 200
+        assert client.get("/api/state", headers={"Host": "[::1]:8000"}).status_code == 200
+        assert client.get("/api/state", headers={"Host": "evil.example"}).status_code == 400
+        evil = {"Origin": "http://evil.example"}
+        assert client.post("/api/columns", json={"label": "X"}, headers=evil).status_code == 403
+        same = {"Origin": "http://127.0.0.1:8000"}
+        assert client.post("/api/columns", json={"label": "X"}, headers=same).status_code == 200
+    with client_for(resolve()) as client:
+        evil = {"Origin": "http://evil.example"}
+        assert client.post("/api/columns", json={"label": "Y"}, headers=evil).status_code == 403

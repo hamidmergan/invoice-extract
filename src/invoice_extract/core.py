@@ -202,12 +202,15 @@ def add_columns(row: Row, columns: List[Column], *, base_url: Optional[str] = No
                 api_key: Optional[str] = None, vision_model: Optional[str] = None,
                 client: Optional[openai.OpenAI] = None, **limits) -> Row:
     """Fill the columns that `row` does not have yet; existing and edited cells stay as they are."""
+    if row.error:
+        return row  # a file that could not be read has no values to add to
     settings = _settings(base_url, model, vision_model, api_key, limits)
     missing = [c for c in columns if c.key not in row.cells and c.key not in RESERVED]
     if missing:
         kind = row.kind or detect(row.path, settings)
         row.kind = kind
         row.cells.update(_fill(row.path, kind, missing, settings, _lazy_client(settings, client)))
-    kept = [c for c in row.checks if c.name == "required"]
-    row.checks = kept + run_checks(row, columns)
+    fresh = run_checks(row, columns)
+    kept = [c for c in row.checks if c.name == "required" and c not in fresh]
+    row.checks = kept + fresh
     return row

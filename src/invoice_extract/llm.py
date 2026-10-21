@@ -2,6 +2,7 @@
 
 import base64
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 import openai
@@ -52,17 +53,28 @@ def _chat(client: openai.OpenAI, model: str, system: str, user: Any) -> str:
     return response.choices[0].message.content or ""
 
 
+_THINK = re.compile(r"<think>.*?</think>", re.S)
+
+
 def _json_object(text: str) -> dict:
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end <= start:
+    """The first top-level JSON object in a model answer; reasoning blocks, fences and chatter around it are skipped."""
+    text = _THINK.sub("", text)
+    decoder = json.JSONDecoder()
+    error: Optional[json.JSONDecodeError] = None
+    for match in re.finditer(r"\{", text):
+        before = text[:match.start()].rstrip()
+        if before.endswith((":", ",", "[")):
+            continue  # a nested value, not the start of an answer
+        try:
+            data, _ = decoder.raw_decode(text, match.start())
+        except json.JSONDecodeError as e:
+            error = error or e
+            continue
+        if isinstance(data, dict):
+            return data
+    if error is None:
         raise ModelError("Model answer contains no JSON object.")
-    try:
-        data = json.loads(text[start:end + 1])
-    except json.JSONDecodeError as e:
-        raise ModelError(f"Model answer is not valid JSON: {e}") from e
-    if not isinstance(data, dict):
-        raise ModelError("Model answer is not a JSON object.")
-    return data
+    raise ModelError(f"Model answer is not valid JSON: {error}")
 
 
 def _field(item: Any) -> Optional[dict]:

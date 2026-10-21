@@ -148,3 +148,21 @@ def test_missing_model_for_pdf_raises_config_error(tmp_path, server):
     with pytest.raises(ConfigError):
         extract(paths[0])
     assert server.requests == []
+
+
+def test_add_columns_leaves_error_rows_alone(server):
+    from invoice_extract import Row
+    row = Row(path="gone.pdf", error="UnsupportedFileError: File not found")
+    out = add_columns(row, [column("Order No.")], base_url=server.base_url, model="m")
+    assert out.cells == {} and out.error.startswith("UnsupportedFileError")
+    assert server.requests == []
+
+
+def test_add_columns_does_not_duplicate_required_checks(tmp_path, server):
+    from invoice_extract import Column
+    xml = write_samples(tmp_path)[2]
+    cols = [Column("supplier", "Supplier", required=True), Column("order_no", "Order No.", required=True)]
+    server.reply = lambda body: "{}"
+    row = extract(xml, cols, base_url=server.base_url, model="m")
+    row = add_columns(row, cols, base_url=server.base_url, model="m")
+    assert [c.message for c in row.checks].count("Missing: Order No.") == 1

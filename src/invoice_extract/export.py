@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, List, Optional, Union
 
 from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
@@ -21,6 +22,7 @@ DETAILS_HEADER = ["File", "Column", "Value", "Raw text", "Source", "Page", "Edit
 # Spreadsheet apps run cells that start with these as formulas.
 DANGEROUS = ("=", "+", "-", "@", "\t", "\r")
 MAX_WIDTH = 50
+SCALARS = (str, int, float, Decimal, datetime.date)
 
 
 def _dangerous(value: Any) -> bool:
@@ -58,7 +60,17 @@ def _details(rows: List[Row], columns: List[Column]) -> List[List[Any]]:
     return out
 
 
+def _scalar(value: Any) -> Any:
+    """Lists and objects from a model answer become JSON text, so every writer can store them."""
+    if value is None or isinstance(value, SCALARS):
+        return value
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
 def _put(ws, row: int, col: int, value: Any):
+    value = _scalar(value)
+    if isinstance(value, str):
+        value = ILLEGAL_CHARACTERS_RE.sub("", value)  # control characters from PDF text are not allowed in xlsx
     if isinstance(value, Decimal):
         cell = ws.cell(row, col, float(value))
         cell.number_format = "#,##0.00"
@@ -76,7 +88,7 @@ def _put(ws, row: int, col: int, value: Any):
 def _sheet(ws, header: List[str], records: List[List[Any]]) -> None:
     widths = [len(h) for h in header]
     for j, label in enumerate(header, start=1):
-        ws.cell(1, j, label).font = Font(bold=True)
+        _put(ws, 1, j, label).font = Font(bold=True)
     for i, record in enumerate(records, start=2):
         for j, value in enumerate(record, start=1):
             _put(ws, i, j, value)
@@ -97,6 +109,7 @@ def _xlsx(rows: List[Row], path: Path, columns: List[Column]) -> None:
 
 
 def _csv_text(value: Any) -> str:
+    value = _scalar(value)
     if value is None:
         return ""
     if _dangerous(value):

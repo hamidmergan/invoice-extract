@@ -53,3 +53,21 @@ def test_detect_broken_pdf(tmp_path):
     broken.write_bytes(b"%PDF-1.4 garbage")
     with pytest.raises(UnsupportedFileError):
         detect(broken, Settings())
+
+
+def test_pdf_over_max_pages_is_rejected(tmp_path):
+    pdf = tmp_path / "long.pdf"
+    pdf.write_bytes(make_pdf([[(50, 780, f"Page {n} " + "x" * 40)] for n in range(3)]))
+    with pytest.raises(LimitError, match="max-pages"):
+        detect(pdf, Settings(max_pages=2))
+    assert detect(pdf, Settings(max_pages=3)) == "pdf"
+
+
+def test_unknown_embedded_xml_falls_back_to_pdf(tmp_path):
+    # ZUGFeRD 1.0 (CrossIndustryDocument) is not parsed; the text layer still works
+    from pdfgen import add_attachment
+    old = b'<rsm:CrossIndustryDocument xmlns:rsm="urn:ferd:CrossIndustryDocument:invoice:1p0"/>'
+    pdf = tmp_path / "zugferd1.pdf"
+    pdf.write_bytes(add_attachment(make_pdf([[(50, 780, "Invoice RE-1 from ACME GmbH, total 119.00 EUR")]]),
+                                   "ZUGFeRD-invoice.xml", old))
+    assert detect(pdf, Settings()) == "pdf"

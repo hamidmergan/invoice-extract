@@ -112,3 +112,24 @@ def test_unknown_format(tmp_path):
     with pytest.raises(ConfigError):
         export([sample_row()], tmp_path / "out.xlsx", format="pdf")
     assert export([sample_row()], tmp_path / "out.dat", format="json").exists()
+
+
+def test_export_survives_control_chars_and_non_scalar_values(tmp_path):
+    # model output or PDF text can carry control characters, lists or objects; one bad cell must not stop the export
+    from invoice_extract import Column
+    cols = [Column("invoice_no", "Invoice No."), Column("gross", "Gross", type="amount"), Column("supplier", "Supplier")]
+    row = Row(path="a.pdf", kind="pdf", cells={"invoice_no": Cell(value="abc\x02def"), "gross": Cell(value=[100]),
+                                               "supplier": Cell(value={"name": "ACME"})})
+    for fmt in ("xlsx", "csv", "json"):
+        export([row], tmp_path / f"out.{fmt}", cols)
+    ws = openpyxl.load_workbook(tmp_path / "out.xlsx")["Invoices"]
+    assert [c.value for c in ws[2]] == ["abcdef", "[100]", '{"name": "ACME"}']
+
+
+def test_xlsx_header_formula_is_text(tmp_path):
+    from invoice_extract import Column
+    label = '=HYPERLINK("http://e","c")'
+    export([Row(path="a.pdf", cells={"x": Cell(value="1")})], tmp_path / "out.xlsx", [Column("x", label)])
+    cell = openpyxl.load_workbook(tmp_path / "out.xlsx")["Invoices"]["A1"]
+    assert cell.data_type == "s"
+    assert cell.value == label

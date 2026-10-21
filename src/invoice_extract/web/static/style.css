@@ -152,7 +152,7 @@ input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: -1p
 .dot.ok { background: var(--ok); }
 .dot.warning { background: var(--warning); }
 .dot.error { background: var(--error); }
-.dot.pending, .dot.running { background: var(--pending); animation: pulse 1.2s ease-in-out infinite; }
+.dot.pending, .dot.running, .dot.queued { background: var(--pending); animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.35; } }
 
 .layout {

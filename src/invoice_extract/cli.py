@@ -79,6 +79,8 @@ def _output(value: Optional[str]) -> Path:
     fmt = path.suffix.lower().lstrip(".")
     if fmt not in FORMATS:
         raise ConfigError(f"Unknown export format {fmt!r}; use one of: {', '.join(FORMATS)}")
+    if not path.parent.is_dir():
+        raise ConfigError(f"Output folder does not exist: {path.parent}")
     return path
 
 
@@ -103,7 +105,11 @@ def _run_extract(argv: List[str]) -> int:
         if row.error:
             line += f": {row.error}"
         print(line, file=sys.stderr)
-    export(rows, output, columns)
+    try:
+        export(rows, output, columns)
+    except OSError as e:
+        print(f"Error: Cannot write {output}: {e}", file=sys.stderr)
+        return 2
     to_check = sum(1 for r in rows if r.status != "ok")
     print(f"Wrote {output} ({len(rows)} files, {to_check} to check)", file=sys.stderr)
     return 1 if any(r.error for r in rows) else 0
@@ -125,7 +131,9 @@ def _run_serve(argv: List[str]) -> int:
         return 2
     if args.host not in LOOPBACK:
         print(NO_LOGIN, file=sys.stderr)
-    uvicorn.run(create_app(settings), host=args.host, port=args.port)
+    # on loopback, only accept our own host names, so other web pages cannot reach the UI via DNS rebinding
+    allowed = list(LOOPBACK) if args.host in LOOPBACK else None
+    uvicorn.run(create_app(settings, allowed_hosts=allowed), host=args.host, port=args.port)
     return 0
 
 

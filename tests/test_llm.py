@@ -107,3 +107,13 @@ def test_fill_prompt_has_keyed_answer_skeleton(server):
     skeleton = json.loads(content[start:content.index("\n", start)])
     assert list(skeleton) == ["invoice_no", "gross"]
     assert skeleton["gross"] == {"value": None, "source_text": "", "page": None}
+
+
+@pytest.mark.parametrize("content", [
+    '<think>The shape is {"invoice_no": ...}, careful.</think>\n{"invoice_no": {"value": "R-1", "page": 1}}',
+    '{"invoice_no": {"value": "R-1", "page": 1}}\nNote: values in {braces} are copied as printed.',
+])
+def test_fill_columns_reasoning_and_trailing_text(server, content):
+    server.reply = lambda body: content
+    out = fill_columns(client_for(server), "m", COLUMNS, TEXT)
+    assert out["invoice_no"]["value"] == "R-1"
