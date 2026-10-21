@@ -68,3 +68,10 @@ def test_xml_text_is_readable():
     assert "119.00" in text
     assert "urn:un:unece" not in text
     assert "\n  " in text
+
+
+def test_parse_line_items_cii_and_ubl():
+    from invoice_extract.einvoice import parse_line_items
+    expected = [{"Description": "Paper", "Quantity": "10", "Unit Price": "10.00", "Amount": "100.00"}]
+    assert parse_line_items(cii_xml()) == expected
+    assert parse_line_items(ubl_xml()) == expected

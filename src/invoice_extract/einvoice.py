@@ -56,6 +56,20 @@ def _parse(data: bytes) -> ET.Element:
     except (ET.ParseError, DefusedXmlException, ValueError) as e:
         raise UnsupportedFileError(f"Cannot read e-invoice XML: {e}") from e
 
+LINE_COLUMNS = ["Description", "Quantity", "Unit Price", "Amount"]
+_CII_LINE: Dict[str, List[str]] = {
+    "Description": ["ram:SpecifiedTradeProduct/ram:Name"],
+    "Quantity": ["ram:SpecifiedLineTradeDelivery/ram:BilledQuantity"],
+    "Unit Price": ["ram:SpecifiedLineTradeAgreement/ram:NetPriceProductTradePrice/ram:ChargeAmount"],
+    "Amount": ["ram:SpecifiedLineTradeSettlement/ram:SpecifiedTradeSettlementLineMonetarySummation/ram:LineTotalAmount"],
+}
+_UBL_LINE: Dict[str, List[str]] = {
+    "Description": ["cac:Item/cbc:Name"],
+    "Quantity": ["cbc:InvoicedQuantity", "cbc:CreditedQuantity"],
+    "Unit Price": ["cac:Price/cbc:PriceAmount"],
+    "Amount": ["cbc:LineExtensionAmount"],
+}
+
 
 def _first(root: ET.Element, paths: List[str]) -> Optional[ET.Element]:
     for path in paths:
@@ -92,6 +106,28 @@ def parse_xml(data: bytes) -> Dict[str, str]:
         else:
             result[key] = node.text.strip()
     return result
+
+
+def parse_line_items(data: bytes) -> List[Dict[str, str]]:
+    """The invoice lines of a CII or UBL invoice, one dict per line over LINE_COLUMNS."""
+    root = _parse(data)
+    kind = _localname(root.tag)
+    if kind == "CrossIndustryInvoice":
+        lines = root.findall("rsm:SupplyChainTradeTransaction/ram:IncludedSupplyChainTradeLineItem", NS)
+        paths = _CII_LINE
+    elif kind in ("Invoice", "CreditNote"):
+        lines = root.findall("cac:InvoiceLine", NS) + root.findall("cac:CreditNoteLine", NS)
+        paths = _UBL_LINE
+    else:
+        raise UnsupportedFileError(f"Not a CII or UBL e-invoice (root element <{kind}>)")
+    rows = []
+    for line in lines:
+        row = {}
+        for column, candidates in paths.items():
+            node = _first(line, candidates)
+            row[column] = node.text.strip() if node is not None else ""
+        rows.append(row)
+    return rows
 
 
 def xml_text(data: bytes) -> str:

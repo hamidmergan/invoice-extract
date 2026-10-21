@@ -90,6 +90,18 @@ def cii_xml(**values) -> bytes:
     <ram:IssueDateTime><udt:DateTimeString format="102">{issue}</udt:DateTimeString></ram:IssueDateTime>
   </rsm:ExchangedDocument>
   <rsm:SupplyChainTradeTransaction>
+    <ram:IncludedSupplyChainTradeLineItem>
+      <ram:SpecifiedTradeProduct><ram:Name>Paper</ram:Name></ram:SpecifiedTradeProduct>
+      <ram:SpecifiedLineTradeAgreement>
+        <ram:NetPriceProductTradePrice><ram:ChargeAmount>10.00</ram:ChargeAmount></ram:NetPriceProductTradePrice>
+      </ram:SpecifiedLineTradeAgreement>
+      <ram:SpecifiedLineTradeDelivery><ram:BilledQuantity unitCode="C62">10</ram:BilledQuantity></ram:SpecifiedLineTradeDelivery>
+      <ram:SpecifiedLineTradeSettlement>
+        <ram:SpecifiedTradeSettlementLineMonetarySummation>
+          <ram:LineTotalAmount>100.00</ram:LineTotalAmount>
+        </ram:SpecifiedTradeSettlementLineMonetarySummation>
+      </ram:SpecifiedLineTradeSettlement>
+    </ram:IncludedSupplyChainTradeLineItem>
     <ram:ApplicableHeaderTradeAgreement>
       <ram:SellerTradeParty><ram:Name>{v["supplier"]}</ram:Name></ram:SellerTradeParty>
     </ram:ApplicableHeaderTradeAgreement>
@@ -142,6 +154,13 @@ def ubl_xml(party_name_only: bool = False, **values) -> bytes:
     <cbc:TaxExclusiveAmount currencyID="{v["currency"]}">{v["net"]}</cbc:TaxExclusiveAmount>
     <cbc:TaxInclusiveAmount currencyID="{v["currency"]}">{v["gross"]}</cbc:TaxInclusiveAmount>
   </cac:LegalMonetaryTotal>
+  <cac:InvoiceLine>
+    <cbc:ID>1</cbc:ID>
+    <cbc:InvoicedQuantity unitCode="C62">10</cbc:InvoicedQuantity>
+    <cbc:LineExtensionAmount currencyID="{v["currency"]}">100.00</cbc:LineExtensionAmount>
+    <cac:Item><cbc:Name>Paper</cbc:Name></cac:Item>
+    <cac:Price><cbc:PriceAmount currencyID="{v["currency"]}">10.00</cbc:PriceAmount></cac:Price>
+  </cac:InvoiceLine>
 </Invoice>
 """.encode("utf-8")
 

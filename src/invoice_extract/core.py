@@ -122,11 +122,16 @@ def _scan_cells(path: PathLike, columns: List[Column], settings: Settings, clien
     settings.require_llm()
     text = _transcribe(path, settings)
     cells = _llm_cells(path, columns, text, "vision", client(), settings.model, locate_boxes=False)
+    _scan_boxes(path, cells, settings, client)
+    return cells
 
+
+def _scan_boxes(path: PathLike, cells: Dict[str, Cell], settings: Settings, client: ClientGetter) -> None:
+    """Ask the vision model where each found value is; best effort, values stay without a box on failure."""
     pages = page_count(path)
     by_page: Dict[int, Dict[str, str]] = {}
     for key, cell in cells.items():
-        if cell.value in (None, ""):
+        if cell.kind != "value" or cell.value in (None, ""):
             continue
         page = cell.page if cell.page is not None else (1 if pages == 1 else None)
         if page is None or not 1 <= page <= pages:
@@ -138,7 +143,6 @@ def _scan_cells(path: PathLike, columns: List[Column], settings: Settings, clien
             if key in cells:
                 cells[key].box = box
                 cells[key].page = page
-    return cells
 
 
 def _fill(path: PathLike, kind: str, columns: List[Column], settings: Settings, client: ClientGetter) -> Dict[str, Cell]:
