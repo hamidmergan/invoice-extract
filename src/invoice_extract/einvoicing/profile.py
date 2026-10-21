@@ -8,7 +8,7 @@ from typing import Any, Union
 import yaml
 
 from ..errors import ConfigError
-from .model import EInvoice, Party
+from .model import EInvoice, Party, iban_text
 
 PARTY_KEYS = {f.name for f in fields(Party)}
 TOP_KEYS = {"seller", "iban", "bic", "payment_terms"}
@@ -44,7 +44,8 @@ def profile_loads(text: str) -> Profile:
     if unknown:
         raise ConfigError(f"Company profile has unknown seller keys: {', '.join(unknown)}")
     return Profile(seller=Party(**{k: _text(seller.get(k)) for k in PARTY_KEYS}),
-                   **{k: _text(data.get(k)) for k in ("iban", "bic", "payment_terms")})
+                   iban=iban_text(data.get("iban")), bic=iban_text(data.get("bic")),
+                   payment_terms=_text(data.get("payment_terms")))
 
 
 def profile_dumps(profile: Profile) -> str:

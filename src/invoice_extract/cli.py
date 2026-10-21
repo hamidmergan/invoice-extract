@@ -12,7 +12,7 @@ from .core import extract_many
 from .discover import fields_of
 from .errors import ConfigError, InvoiceError
 from .einvoicing import FORMATS as FORMATS_E
-from .einvoicing import convert_many, write
+from .einvoicing import convert_many, output_name, write
 from .einvoicing.profile import load_profile
 from .export import FORMATS, export
 
@@ -141,6 +141,17 @@ def _einvoice_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _unique_name(name: str, taken: set) -> str:
+    """`name`, or `stem (2).ext` etc. when another file of this run already got it."""
+    path = Path(name)
+    candidate, n = name, 2
+    while candidate in taken:
+        candidate = f"{path.stem} ({n}){path.suffix}"
+        n += 1
+    taken.add(candidate)
+    return candidate
+
+
 def _run_einvoice(argv: List[str]) -> int:
     args = _einvoice_parser().parse_args(argv)
     try:
@@ -153,6 +164,7 @@ def _run_einvoice(argv: List[str]) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 2
     failed = 0
+    taken: set = set()
     for conv in conversions:
         name = Path(conv.path).name
         if conv.error:
@@ -167,7 +179,13 @@ def _run_einvoice(argv: List[str]) -> int:
             for issue in problems:
                 print(f"  - {issue.field}: {issue.message} [{issue.rule}]", file=sys.stderr)
             continue
-        path = write(conv, args.format, out_dir)
+        target = _unique_name(output_name(conv.path, args.format), taken)
+        try:
+            path = write(conv, args.format, out_dir, target)
+        except Exception as e:  # one file that cannot be written must not stop the others
+            print(f"{name}: error: {type(e).__name__}: {e}", file=sys.stderr)
+            failed += 1
+            continue
         print(f"{name}: written {path}", file=sys.stderr)
         for issue in issues:
             print(f"  (warning) {issue.field}: {issue.message} [{issue.rule}]", file=sys.stderr)

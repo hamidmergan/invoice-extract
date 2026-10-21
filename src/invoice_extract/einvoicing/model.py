@@ -6,8 +6,10 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
 from ..errors import ConfigError
+from .codes import to_unit
 
 CENT = Decimal("0.01")
+MAX_NUMBER = Decimal("1e15")
 
 
 @dataclass
@@ -19,6 +21,7 @@ class Party:
     country: str = ""  # ISO 3166-1 alpha-2, e.g. "DE"
     vat_id: str = ""
     tax_number: str = ""
+    legal_id: str = ""  # BT-30, e.g. the commercial register number "HRB 12345"
     contact_name: str = ""
     phone: str = ""
     email: str = ""
@@ -147,17 +150,21 @@ def parse_decimal(value: Any, name: str) -> Optional[Decimal]:
     if isinstance(value, bool):
         raise ConfigError(f"{name}: not a number")
     if isinstance(value, (int, float, Decimal)):
-        return Decimal(str(value))
-    text = str(value).strip().replace(" ", "").replace("%", "")
-    if "," in text and "." in text:
-        dec = max(text.rfind(","), text.rfind("."))
-        text = text[:dec].replace(",", "").replace(".", "") + "." + text[dec + 1:]
-    elif "," in text:
-        text = text.replace(",", ".")
+        text = str(value)
+    else:
+        text = str(value).strip().replace(" ", "").replace("%", "")
+        if "," in text and "." in text:
+            dec = max(text.rfind(","), text.rfind("."))
+            text = text[:dec].replace(",", "").replace(".", "") + "." + text[dec + 1:]
+        elif "," in text:
+            text = text.replace(",", ".")
     try:
-        return Decimal(text)
+        number = Decimal(text)
     except InvalidOperation:
         raise ConfigError(f"{name}: {value!r} is not a number") from None
+    if not number.is_finite() or abs(number) >= MAX_NUMBER:
+        raise ConfigError(f"{name}: {value!r} is not a usable number")
+    return Decimal(format(number, "f"))  # plain notation: 1E+1 becomes 10
 
 
 def parse_date(value: Any, name: str) -> Optional[datetime.date]:
@@ -180,17 +187,30 @@ def _party(data: Any) -> Party:
     return Party(**{f.name: _text(data.get(f.name)) for f in fields(Party)})
 
 
+def unsign(line: Line) -> Line:
+    """A negative unit price (a discount or credit) becomes a negative quantity; EN 16931 needs prices ≥ 0 (BR-27)."""
+    if line.unit_price is not None and line.unit_price < 0:
+        line.unit_price = -line.unit_price
+        line.quantity = -(line.quantity if line.quantity is not None else Decimal("1"))
+    return line
+
+
+def iban_text(value: Any) -> str:
+    return "".join(_text(value).split()).upper()
+
+
 def _line(data: Any, i: int) -> Line:
     data = data if isinstance(data, dict) else {}
-    return Line(
+    unit = _text(data.get("unit"))
+    return unsign(Line(
         description=_text(data.get("description")),
         quantity=parse_decimal(data.get("quantity"), f"lines.{i}.quantity"),
-        unit=_text(data.get("unit")) or "C62",
+        unit=to_unit(unit) or unit.upper() or "C62",
         unit_price=parse_decimal(data.get("unit_price"), f"lines.{i}.unit_price"),
         vat_rate=parse_decimal(data.get("vat_rate"), f"lines.{i}.vat_rate"),
         vat_category=_text(data.get("vat_category")).upper(),
         amount=parse_decimal(data.get("amount"), f"lines.{i}.amount"),
-    )
+    ))
 
 
 DATES = ("issue_date", "period_start", "period_end", "delivery_date", "due_date")
@@ -214,6 +234,8 @@ def from_dict(data: Dict[str, Any]) -> EInvoice:
             inv.lines = [_line(item, i) for i, item in enumerate(value if isinstance(value, list) else [])]
         elif f.name == "notes":
             inv.notes = [_text(n) for n in (value if isinstance(value, list) else []) if _text(n)]
+        elif f.name in ("iban", "debited_iban", "bic"):
+            setattr(inv, f.name, iban_text(value))
         else:
             setattr(inv, f.name, _text(value))
     return inv

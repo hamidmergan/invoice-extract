@@ -100,3 +100,15 @@ def test_guard_applies(server):
     with TestClient(app, base_url="http://127.0.0.1:8000") as client:
         assert client.get("/api/e/state", headers={"Host": "evil.example"}).status_code == 400
         assert client.put("/api/e/profile", json={}, headers={"Origin": "http://evil.example"}).status_code == 403
+
+
+def test_download_with_non_latin_file_name(tmp_path, server):
+    server.reply = reply()
+    pdf = tmp_path / "Rechnung – Mai €.pdf"
+    pdf.write_bytes(write_samples(tmp_path)[0].read_bytes())
+    with client_for(server) as client:
+        file_id = upload(client, pdf).json()["files"][0]["id"]
+        wait_done(client)
+        res = client.get(f"/api/e/files/{file_id}/download?format=xrechnung")
+        assert res.status_code == 200
+        assert "filename*=UTF-8''Rechnung%20%E2%80%93%20Mai%20%E2%82%AC.xml" in res.headers["content-disposition"]

@@ -2,6 +2,7 @@
 
 import threading
 import uuid
+from urllib.parse import quote
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -48,6 +49,12 @@ class EWorkspace:
 
 class InvoiceBody(BaseModel):
     invoice: Dict[str, Any]
+
+
+def _disposition(name: str) -> str:
+    """An attachment header that works for any file name: an ASCII fallback plus the UTF-8 name (RFC 5987)."""
+    fallback = "".join(c if 32 <= ord(c) < 127 and c not in '"\\' else "_" for c in name)
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(name)}"
 
 
 def _boxes(row: Optional[Row]) -> Dict[str, Any]:
@@ -160,8 +167,8 @@ def register(app: FastAPI, settings: Settings, lock: threading.Lock, pool: Threa
                                  "issues": [asdict(i) for i in problems]}, status_code=409)
         xml = build_cii(invoice, format)
         data = xml if format == "xrechnung" else write_zugferd(entry.path, xml)
-        name = output_name(entry.name, format)
-        return Response(data, media_type=MEDIA[format], headers={"Content-Disposition": f'attachment; filename="{name}"'})
+        return Response(data, media_type=MEDIA[format],
+                        headers={"Content-Disposition": _disposition(output_name(entry.name, format))})
 
     def set_profile(profile: Profile) -> Dict[str, Any]:
         with lock:

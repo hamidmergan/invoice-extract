@@ -142,3 +142,39 @@ def test_cli_einvoice_problems(tmp_path, server, capsys):
     err = capsys.readouterr().err
     assert "digital.pdf: 1 problem" in err and "buyer.email" in err
     assert main(["einvoice", str(pdf), "--profile", str(tmp_path / "missing.yaml")] + llm_flags(server)) == 2
+
+
+def test_cli_einvoice_same_names_do_not_overwrite(tmp_path, server, capsys):
+    from test_einvoicing_convert import reply
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    first, second = tmp_path / "a" / "x.pdf", tmp_path / "b" / "x.pdf"
+    sample = write_samples(tmp_path)[0].read_bytes()
+    first.write_bytes(sample)
+    second.write_bytes(sample)
+    server.reply = reply()
+    out = tmp_path / "out"
+    out.mkdir()
+    assert main(["einvoice", str(first), str(second), "-o", str(out)] + llm_flags(server)) == 0
+    assert sorted(p.name for p in out.iterdir()) == ["x (2).xml", "x.xml"]
+
+
+def test_cli_einvoice_write_error_does_not_stop_the_batch(tmp_path, server, capsys, monkeypatch):
+    from test_einvoicing_convert import reply
+    import invoice_extract.cli as cli
+    paths = [tmp_path / "one.pdf", tmp_path / "two.pdf"]
+    for p in paths:
+        p.write_bytes(write_samples(tmp_path)[0].read_bytes())
+    server.reply = reply()
+    real = cli.write
+    calls = []
+
+    def flaky(conv, fmt, out_dir, name=None):
+        calls.append(conv.path)
+        if len(calls) == 1:
+            raise RuntimeError("disk full")
+        return real(conv, fmt, out_dir, name)
+    monkeypatch.setattr(cli, "write", flaky)
+    assert main(["einvoice", *map(str, paths), "-o", str(tmp_path)] + llm_flags(server)) == 1
+    err = capsys.readouterr().err
+    assert "one.pdf: error: RuntimeError: disk full" in err and "two.pdf: written" in err

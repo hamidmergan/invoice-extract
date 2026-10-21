@@ -68,14 +68,14 @@ def output_name(source: PathLike, format: str) -> str:
     return f"{stem}.xml" if format == "xrechnung" else f"{stem}-zugferd.pdf"
 
 
-def write(conversion: Conversion, format: str, out_dir: PathLike) -> Path:
-    """Write the e-invoice next to the others in `out_dir`. Raises ConfigError if it is not valid."""
+def write(conversion: Conversion, format: str, out_dir: PathLike, name: Optional[str] = None) -> Path:
+    """Write the e-invoice into `out_dir` (as `name`, default from the source name). ConfigError if not valid."""
     if format not in FORMATS:
         raise ConfigError(f"Unknown e-invoice format {format!r}; use one of: {', '.join(FORMATS)}")
     if conversion.invoice is None:
         raise ConfigError(conversion.error or "Nothing was read from this file.")
     xml = build_cii(conversion.invoice, format)
-    path = Path(out_dir) / output_name(conversion.path, format)
+    path = Path(out_dir) / (name or output_name(conversion.path, format))
     path.write_bytes(xml if format == "xrechnung" else write_zugferd(conversion.path, xml))
     return path
 

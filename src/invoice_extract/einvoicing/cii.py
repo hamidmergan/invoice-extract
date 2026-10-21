@@ -36,6 +36,8 @@ def _party(target, party: Party, contact: bool = False) -> None:
         target.tax_registrations.add(TaxRegistration(id=("VA", party.vat_id)))
     if party.tax_number:
         target.tax_registrations.add(TaxRegistration(id=("FC", party.tax_number)))
+    if party.legal_id:
+        target.legal_organization.id = party.legal_id
     if contact and (party.contact_name or party.phone or party.email):
         if party.contact_name:
             target.contact.person_name = party.contact_name
@@ -90,7 +92,9 @@ def build_cii(inv: EInvoice, format: str) -> bytes:
     if inv.payment_terms or inv.due_date is not None or inv.mandate_reference:
         terms = PaymentTerms()
         if inv.payment_terms:
-            terms.description = inv.payment_terms
+            # XRechnung's Skonto syntax (BR-DE-18) must end with a line break
+            skonto = any(line.strip().startswith("#") for line in inv.payment_terms.splitlines())
+            terms.description = inv.payment_terms + ("\n" if skonto else "")
         if inv.due_date is not None:
             terms.due = inv.due_date
         if inv.payment_means == "debit" and inv.mandate_reference:
@@ -101,7 +105,7 @@ def build_cii(inv: EInvoice, format: str) -> bytes:
         tax = ApplicableTradeTax()
         tax.calculated_amount = group.tax
         tax.type_code = "VAT"
-        if group.category == "E" and inv.exemption_reason:
+        if group.category in ("E", "AE") and inv.exemption_reason:
             tax.exemption_reason = inv.exemption_reason
         tax.basis_amount = group.basis
         tax.category_code = group.category

@@ -110,7 +110,7 @@ async function refresh() {
 
 function select(id) {
   if (id === ui.selected) return;
-  flushSave();
+  guard(flushSave)();
   ui.selected = id;
   ui.focus = null;
   const file = current();
@@ -269,14 +269,15 @@ function scheduleSave() {
   ui.saveTimer = setTimeout(guard(save), 400);
 }
 
-function flushSave() {
-  if (ui.saveTimer) {
+async function flushSave() {
+  // Save a pending edit now; a download waits for it and stops if the edit cannot be saved.
+  if (ui.saveTimer || ui.dirty) {
     clearTimeout(ui.saveTimer);
-    guard(save)();
+    await save(true);
   }
 }
 
-async function save() {
+async function save(strict) {
   ui.saveTimer = null;
   const file = current();
   if (!file || !ui.invoice) return;
@@ -284,6 +285,10 @@ async function save() {
   try {
     const entry = await api("PUT", `/api/e/files/${encodeURIComponent(file.id)}`, { invoice });
     Object.assign(file, entry);
+    if (file.id !== ui.selected) {  // the user moved on to another invoice meanwhile
+      renderFiles();
+      return;
+    }
     ui.dirty = false;
     renderFiles();
     renderStatus();
@@ -292,6 +297,7 @@ async function save() {
     markIssues(issuesOf(file).concat(file.hints || []));
   } catch (e) {
     toast(e.message);  // e.g. "issue_date: '31.02.' is not a date" — the value stays for the user to fix
+    if (strict) throw e;
   }
 }
 
@@ -406,7 +412,7 @@ async function download(file) {
 }
 
 async function downloadAll() {
-  flushSave();
+  await flushSave();
   const ready = ui.data.files.filter((f) => statusOf(f) === "ok" || statusOf(f) === "warning");
   if (!ready.length) throw new Error("No invoice is ready yet.");
   for (const file of ready) await download(file);
@@ -464,7 +470,7 @@ function setup() {
     await uploadFiles(Array.from(event.dataTransfer.files));
   }));
   document.querySelectorAll('input[name="format"]').forEach((r) => r.addEventListener("change", () => { renderFiles(); renderStatus(); }));
-  $("download-button").addEventListener("click", guard(async () => { flushSave(); await download(current()); }));
+  $("download-button").addEventListener("click", guard(async () => { await flushSave(); await download(current()); }));
   $("download-all-button").addEventListener("click", guard(downloadAll));
   $("clear-button").addEventListener("click", guard(clearAll));
   $("profile-button").addEventListener("click", openProfile);

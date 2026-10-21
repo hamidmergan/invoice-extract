@@ -60,8 +60,8 @@ def test_exempt_needs_reason_and_standard_needs_vat_id():
     assert by_field(check(inv, "zugferd")) == {"exemption_reason": "error"}
     inv = valid_invoice()
     inv.seller = dataclasses.replace(inv.seller, vat_id="")
-    assert by_field(check(inv, "zugferd")) == {"seller.vat_id": "error"}
-    inv.seller = dataclasses.replace(inv.seller, tax_number="12/345/67890")
+    assert by_field(check(inv, "zugferd")) == {"seller.vat_id": "error", "seller.legal_id": "error"}
+    inv.seller = dataclasses.replace(inv.seller, tax_number="12/345/67890", legal_id="HRB 12345")
     assert check(inv, "zugferd") == []
 
 

@@ -5,11 +5,12 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from ..checks import iban_valid
+from .codes import COUNTRIES, CURRENCIES, SUPPORTED_CATEGORIES, UNITS, ZERO_CATEGORIES
 from .model import CENT, EInvoice, cents, category, tax_groups, totals
 
 FORMATS = ("xrechnung", "zugferd")
-_COUNTRY = re.compile(r"[A-Z]{2}")
-_CURRENCY = re.compile(r"[A-Z]{3}")
+# XRechnung's Skonto line (BR-DE-18); every line of the payment terms that starts with "#" must be one
+SKONTO_LINE = re.compile(r"#SKONTO#TAGE=[0-9]+#PROZENT=[0-9]+\.[0-9]{2}(#BASISBETRAG=-?[0-9]+\.[0-9]{2})?#")
 _EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 
 
@@ -33,13 +34,22 @@ def check(inv: EInvoice, format: str) -> List[Issue]:
     need(bool(inv.number), "number", "BR-02", "The invoice number is missing.")
     need(inv.issue_date is not None, "issue_date", "BR-03", "The invoice date is missing.")
     need(inv.type_code in ("380", "381"), "type_code", "BR-04", "The document type must be 380 or 381.")
-    need(bool(_CURRENCY.fullmatch(inv.currency)), "currency", "BR-05", "The currency must be a 3-letter code, e.g. EUR.")
+    need(inv.currency in CURRENCIES, "currency", "BR-CL-03", "The currency must be an ISO 4217 code, e.g. EUR.")
     need(bool(inv.seller.name), "seller.name", "BR-06", "The seller name is missing.")
     need(bool(inv.buyer.name), "buyer.name", "BR-07", "The buyer name is missing.")
-    need(bool(_COUNTRY.fullmatch(inv.seller.country)), "seller.country", "BR-09",
-         "The seller country must be a 2-letter code, e.g. DE.")
-    need(bool(_COUNTRY.fullmatch(inv.buyer.country)), "buyer.country", "BR-11",
-         "The buyer country must be a 2-letter code, e.g. DE.")
+    need(inv.seller.country in COUNTRIES, "seller.country", "BR-CL-14",
+         "The seller country must be an ISO country code, e.g. DE (GB for the United Kingdom).")
+    need(inv.buyer.country in COUNTRIES, "buyer.country", "BR-CL-14",
+         "The buyer country must be an ISO country code, e.g. DE (GB for the United Kingdom).")
+    for who in ("seller", "buyer"):
+        vat_id = getattr(inv, who).vat_id
+        if vat_id:
+            need(len(vat_id) > 2 and (vat_id[:2] in COUNTRIES or vat_id[:2] == "EL"), f"{who}.vat_id", "BR-CO-09",
+                 "A VAT ID starts with its country code, e.g. DE123456789.")
+    need(bool(inv.seller.vat_id or inv.seller.legal_id), "seller.legal_id", "BR-CO-26",
+         "Without a VAT ID the seller needs a legal registration ID, e.g. the commercial register number HRB 12345.")
+    if inv.period_start is not None and inv.period_end is not None:
+        need(inv.period_start <= inv.period_end, "period_end", "BR-29", "The service period ends before it starts.")
     need(bool(inv.lines), "lines", "BR-16", "The invoice needs at least one line.")
 
     for i, line in enumerate(inv.lines):
@@ -47,12 +57,22 @@ def check(inv: EInvoice, format: str) -> List[Issue]:
         need(bool(line.description), f"{path}.description", "BR-25", "The line has no description.")
         need(line.quantity is not None, f"{path}.quantity", "BR-22", "The line has no quantity.")
         need(line.unit_price is not None, f"{path}.unit_price", "BR-26", "The line has no unit price.")
-        need(bool(line.unit), f"{path}.unit", "BR-23", "The line has no unit.")
+        need(line.unit in UNITS, f"{path}.unit", "BR-CL-23", "Unknown unit; use a unit code such as C62 (piece), "
+             "HUR (hour), DAY, MON (month), KGM (kg), LTR (litre), MTR (metre) or KWH.")
+        if line.unit_price is not None:
+            need(line.unit_price >= 0, f"{path}.unit_price", "BR-27",
+                 "The unit price must not be negative; put the minus on the quantity.")
         cat = category(line)
-        if line.vat_rate is None and not line.vat_category:
+        if cat not in SUPPORTED_CATEGORIES:
+            issues.append(Issue(f"{path}.vat_category", "error", "BR-CL-18",
+                                f"VAT category {cat!r} is not supported; use S, Z, E or AE."))
+        elif line.vat_rate is None and not line.vat_category:
             issues.append(Issue(f"{path}.vat_rate", "error", "BR-CO-04", "The line has no VAT rate."))
         elif cat == "S" and line.vat_rate is not None and line.vat_rate <= 0:
             issues.append(Issue(f"{path}.vat_rate", "error", "BR-S-05", "A standard-rated line needs a rate above 0."))
+        elif cat in ZERO_CATEGORIES and line.vat_rate is not None and line.vat_rate != 0:
+            issues.append(Issue(f"{path}.vat_rate", "error", f"BR-{cat}-05",
+                                f"VAT category {cat} needs a rate of 0."))
         if line.amount is not None and line.quantity is not None and line.unit_price is not None:
             if abs(cents(line.amount) - cents(line.quantity * line.unit_price)) > CENT:
                 issues.append(Issue(f"{path}.amount", "error", "BR-LINE",
@@ -64,9 +84,13 @@ def check(inv: EInvoice, format: str) -> List[Issue]:
     if "S" in cats:
         need(bool(inv.seller.vat_id or inv.seller.tax_number), "seller.vat_id", "BR-S-02",
              "Standard-rated VAT needs the seller's VAT ID or tax number.")
-    if "E" in cats:
+    if cats & {"E", "Z"}:
+        need(bool(inv.seller.vat_id or inv.seller.tax_number), "seller.tax_number", "BR-E-02",
+             "Lines without VAT need the seller's VAT ID or tax number.")
+    if cats & {"E", "AE"}:
         need(bool(inv.exemption_reason), "exemption_reason", "BR-E-10",
-             "Lines without VAT need an exemption reason, e.g. 'Kleinunternehmer gemäß § 19 UStG'.")
+             "Lines without VAT need an exemption reason, e.g. 'Kleinunternehmer gemäß § 19 UStG' or "
+             "'Reverse charge'.")
     if "AE" in cats:
         need(bool(inv.seller.vat_id), "seller.vat_id", "BR-AE-02", "Reverse charge needs the seller's VAT ID.")
         need(bool(inv.buyer.vat_id), "buyer.vat_id", "BR-AE-02", "Reverse charge needs the buyer's VAT ID.")
@@ -87,6 +111,9 @@ def check(inv: EInvoice, format: str) -> List[Issue]:
             issues.append(Issue(field, "error", "IBAN", "The IBAN checksum is invalid."))
 
     # German XRechnung rules: errors for XRechnung, warnings for ZUGFeRD
+    hash_lines = [line.strip() for line in inv.payment_terms.splitlines() if line.strip().startswith("#")]
+    need(all(SKONTO_LINE.fullmatch(line) for line in hash_lines), "payment_terms", "BR-DE-18",
+         "Lines starting with # must be Skonto terms like #SKONTO#TAGE=10#PROZENT=2.00#.", german=True)
     need(bool(inv.buyer_reference), "buyer_reference", "BR-DE-15",
          "XRechnung needs a buyer reference (Leitweg-ID or any reference agreed with the buyer).", german=True)
     need(bool(inv.seller.city), "seller.city", "BR-DE-3", "XRechnung needs the seller's city.", german=True)

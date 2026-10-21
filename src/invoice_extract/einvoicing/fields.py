@@ -7,7 +7,11 @@ from typing import Any, Dict, List, Optional
 from ..columns import Column
 from ..errors import ConfigError
 from ..results import Row
-from .model import EInvoice, Line, Party, parse_decimal
+from .codes import to_unit
+from .model import EInvoice, Line, Party, iban_text, parse_decimal, unsign
+
+# Rates the single fallback line may use when no lines were read (German standard and reduced VAT)
+FALLBACK_RATES = (Decimal("19.00"), Decimal("7.00"))
 
 LINE_FIELDS = ["Description", "Quantity", "Unit", "Unit Price", "VAT Rate", "Amount"]
 
@@ -29,6 +33,8 @@ EINVOICE_FIELDS: List[Column] = [
     _f("seller_country", "Seller Country", "Country of the seller as a 2-letter ISO code, e.g. DE."),
     _f("seller_vat_id", "Seller VAT ID", "VAT identification number of the seller (USt-IdNr.), e.g. DE123456789."),
     _f("seller_tax_number", "Seller Tax Number", "Tax number of the seller (Steuernummer), if printed."),
+    _f("seller_legal_id", "Seller Register No.", "Commercial register number of the seller, e.g. 'HRB 12345', "
+                                                 "if printed."),
     _f("seller_contact", "Seller Contact", "Contact person at the seller, if printed."),
     _f("seller_phone", "Seller Phone", "Phone number of the seller's office or hotline; not the customer's phone "
                                        "number, contract number or 'Rufnummer' on a phone bill."),
@@ -70,7 +76,7 @@ CELL_TO_FIELD = {
     "seller_contact": "seller.contact_name", "buyer_name": "buyer.name", "net": "printed_net",
     "vat": "printed_vat", "gross": "printed_gross",
     **{f"seller_{k}": f"seller.{k}" for k in ("street", "postcode", "city", "country", "vat_id", "tax_number",
-                                                "phone", "email")},
+                                                "legal_id", "phone", "email")},
     **{f"buyer_{k}": f"buyer.{k}" for k in ("street", "postcode", "city", "country", "vat_id", "email")},
 }
 
@@ -78,15 +84,6 @@ CELL_TO_FIELD = {
 def field_path(key: str) -> str:
     return CELL_TO_FIELD.get(key, key)
 
-
-UNIT_CODES = {
-    "c62": "C62", "stk": "C62", "stk.": "C62", "stück": "C62", "piece": "C62", "pieces": "C62", "pcs": "C62",
-    "x": "C62", "pauschal": "C62", "psch": "C62", "flat": "C62",
-    "h": "HUR", "std": "HUR", "std.": "HUR", "stunde": "HUR", "stunden": "HUR", "hour": "HUR", "hours": "HUR",
-    "hur": "HUR", "tag": "DAY", "tage": "DAY", "day": "DAY", "days": "DAY", "monat": "MON", "monate": "MON",
-    "month": "MON", "months": "MON", "kg": "KGM", "l": "LTR", "liter": "LTR", "litre": "LTR", "m": "MTR",
-    "meter": "MTR", "metre": "MTR", "km": "KMT", "m2": "MTK", "m²": "MTK", "qm": "MTK",
-}
 
 COUNTRIES = {
     "deutschland": "DE", "germany": "DE", "österreich": "AT", "austria": "AT", "schweiz": "CH",
@@ -101,8 +98,6 @@ def _text(value: Any) -> str:
 
 
 def _decimal(value: Any) -> Optional[Decimal]:
-    if isinstance(value, Decimal):
-        return value
     try:
         return parse_decimal(value, "value")
     except ConfigError:
@@ -128,7 +123,8 @@ def country(value: Any) -> str:
 
 
 def unit_code(value: Any) -> str:
-    return UNIT_CODES.get(_text(value).lower(), "C62")
+    """The unit code for a printed unit; unknown or missing units count as pieces (C62)."""
+    return to_unit(_text(value)) or "C62"
 
 
 def _line(data: Dict[str, Any]) -> Optional[Line]:
@@ -137,9 +133,9 @@ def _line(data: Dict[str, Any]) -> Optional[Line]:
     if not description and amount is None:
         return None
     quantity = _decimal(data.get("Quantity"))
-    return Line(description=description, quantity=quantity if quantity is not None else Decimal("1"),
-                unit=unit_code(data.get("Unit")), unit_price=_decimal(data.get("Unit Price")),
-                vat_rate=_rate(data.get("VAT Rate")), amount=amount)
+    return unsign(Line(description=description, quantity=quantity if quantity is not None else Decimal("1"),
+                       unit=unit_code(data.get("Unit")), unit_price=_decimal(data.get("Unit Price")),
+                       vat_rate=_rate(data.get("VAT Rate")), amount=amount))
 
 
 def from_row(row: Row) -> EInvoice:
@@ -159,7 +155,8 @@ def from_row(row: Row) -> EInvoice:
     inv.seller = Party(name=_text(value("supplier")), street=_text(value("seller_street")),
                        postcode=_text(value("seller_postcode")), city=_text(value("seller_city")),
                        country=country(value("seller_country")), vat_id=_text(value("seller_vat_id")),
-                       tax_number=_text(value("seller_tax_number")), contact_name=_text(value("seller_contact")),
+                       tax_number=_text(value("seller_tax_number")), legal_id=_text(value("seller_legal_id")),
+                       contact_name=_text(value("seller_contact")),
                        phone=_text(value("seller_phone")), email=_text(value("seller_email")))
     inv.buyer = Party(name=_text(value("buyer_name")), street=_text(value("buyer_street")),
                       postcode=_text(value("buyer_postcode")), city=_text(value("buyer_city")),
@@ -169,11 +166,11 @@ def from_row(row: Row) -> EInvoice:
     for key in ("period_start", "period_end", "delivery_date", "due_date"):
         setattr(inv, key, _date(value(key)))
     inv.payment_terms = _text(value("payment_terms"))
-    inv.iban = "".join(_text(value("iban")).split()).upper()
+    inv.iban = iban_text(value("iban"))
     inv.bic = _text(value("bic")).upper()
     inv.mandate_reference = _text(value("mandate_reference"))
     inv.creditor_id = _text(value("creditor_id"))
-    inv.debited_iban = "".join(_text(value("debited_iban")).split()).upper()
+    inv.debited_iban = iban_text(value("debited_iban"))
     means = _text(value("payment_means")).lower()
     debit = any(word in means for word in ("debit", "lastschrift", "einzug")) or inv.mandate_reference
     inv.payment_means = "debit" if debit else "transfer"
@@ -189,7 +186,9 @@ def from_row(row: Row) -> EInvoice:
     if not inv.lines and inv.printed_net is not None:
         rate = None
         if inv.printed_vat is not None and inv.printed_net > 0:
-            rate = (inv.printed_vat / inv.printed_net * 100).quantize(Decimal("1"))
+            rate = (inv.printed_vat / inv.printed_net * 100).quantize(Decimal("0.01"))
+            if rate not in FALLBACK_RATES:
+                rate = None  # e.g. a mix of 19 % and 7 %: the user enters the lines instead of a made-up rate
         inv.lines.append(Line(description=f"Invoice {inv.number}".strip(), unit_price=inv.printed_net,
                               vat_rate=rate, amount=inv.printed_net))
     return inv

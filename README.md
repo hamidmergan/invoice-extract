@@ -76,7 +76,7 @@ seller:
   postcode: "12345"
   city: Berlin
   country: DE
-  vat_id: DE123456789
+  vat_id: DE123456789          # or tax_number plus legal_id (e.g. "HRB 12345") if you have no VAT ID
   contact_name: Jane Doe
   phone: "+49 30 123456"
   email: billing@example.com
@@ -100,7 +100,8 @@ Good to know:
 - XRechnung asks for more than most printed invoices show: a buyer reference (Leitweg-ID, or any reference agreed with the buyer), a seller contact person, phone and e-mail, and the buyer's e-mail address. ZUGFeRD (EN 16931) shows these as warnings only.
 - The XML follows EN 16931 in the CII syntax and was checked with the official KoSIT validator (XRechnung 3.0.2 configuration). For your own invoices, you can check the files the same way: [KoSIT validator](https://github.com/itplr-kosit/validator).
 - A ZUGFeRD PDF contains a valid XML, but the PDF itself is only as PDF/A-3 conform as your source PDF.
-- Not supported yet: allowances and charges, prepayments, other currencies than the one on the invoice, UBL output.
+- VAT categories: standard rate (S), zero rated (Z), exempt (E, e.g. small businesses under § 19 UStG, with the exemption reason) and reverse charge (AE). Discounts and credits are written with a negative quantity, as EN 16931 requires.
+- Not supported yet: the categories K, G and O, allowances and charges on document level, prepayments, UBL output.
 - An invoice that already is an e-invoice is reported as such and not converted.
 
 ### Web UI (table)
