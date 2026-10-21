@@ -6,11 +6,8 @@ from invoice_extract.columns import STANDARD_COLUMNS, Column
 from invoice_extract.config import Settings
 from invoice_extract.errors import ConfigError, ModelError
 from invoice_extract.llm import (
-    discover_items,
     fill_columns,
     make_client,
-    merge_labels,
-    merge_table_columns,
     vision_boxes,
 )
 from invoice_extract.results import Box
@@ -127,48 +124,6 @@ def test_fill_columns_reasoning_and_trailing_text(server, content):
     assert out["invoice_no"]["value"] == "R-1"
 
 
-ITEMS = {"items": [
-    {"label": "Invoice No.", "kind": "value", "type": "text", "role": "invoice_no", "value": "R-1",
-     "source_text": "Invoice R-1", "page": 1},
-    {"label": "Payment Note", "kind": "text", "text": "We debit 119.00 EUR on 2026-11-20.",
-     "source_text": "We debit", "end_text": "2026-11-20.", "page": 1},
-    {"label": "Line Items", "kind": "table", "columns": ["Description", "Amount"],
-     "rows": [["Paper", "100,00"], {"Description": "Toner", "Amount": 19}], "source_text": "Paper 100,00",
-     "end_text": "Toner 19", "page": 1},
-]}
-
-
-def test_discover_items_three_kinds(server):
-    server.reply = lambda body: json.dumps(ITEMS)
-    items = discover_items(client_for(server), "m", TEXT)
-    assert [i["kind"] for i in items] == ["value", "text", "table"]
-    assert items[0]["role"] == "invoice_no" and items[0]["value"] == "R-1"
-    assert items[1]["text"].startswith("We debit") and items[1]["end_text"] == "2026-11-20."
-    assert items[2]["rows"] == [{"Description": "Paper", "Amount": "100,00"}, {"Description": "Toner", "Amount": "19"}]
-    assert set(items[0]) == {"label", "kind", "type", "role", "value", "text", "columns", "rows", "source_text",
-                             "end_text", "page"}
-
-
-def test_discover_items_sloppy(server):  # Review Focus 3
-    server.reply = lambda body: json.dumps({"items": [
-        {"label": "", "kind": "value", "value": "x"},
-        {"label": "Pic", "kind": "picture"},
-        {"label": "Ref", "kind": "value", "type": "money", "role": "boss", "value": "A", "page": "one"},
-        {"label": "T", "kind": "table", "columns": ["A", "B"], "rows": [["1"], ["1", "2", "3"], None]},
-        "junk",
-    ]})
-    items = discover_items(client_for(server), "m", TEXT)
-    assert [i["label"] for i in items] == ["Ref", "T"]
-    assert items[0]["type"] == "text" and items[0]["role"] == "" and items[0]["page"] is None
-    assert items[1]["rows"] == [{"A": "1", "B": ""}, {"A": "1", "B": "2"}]
-
-
-def test_discover_items_needs_items_list(server):
-    server.reply = lambda body: '{"answer": 1}'
-    with pytest.raises(ModelError):
-        discover_items(client_for(server), "m", TEXT)
-
-
 def test_fill_columns_text_and_table(server):
     cols = [Column("note", "Note", kind="text"),
             Column("lines", "Line Items", kind="table", table_columns=["Description", "Amount"])]
@@ -180,60 +135,3 @@ def test_fill_columns_text_and_table(server):
     assert out["lines"]["rows"] == [{"Description": "Paper", "Amount": "100,00"}]
     sent = server.requests[0]["body"]["messages"][-1]["content"]
     assert '"kind": "table"' in sent and "Description" in sent
-
-
-def test_merge_labels(server):
-    server.reply = lambda body: json.dumps({"mapping": {"Kd.-Nr.": "Customer No.", "Customer number": "Customer No.",
-                                                        "Odd": 5}})
-    labels = [{"label": label, "kind": "value", "type": "text", "examples": ["1"]}
-              for label in ("Kd.-Nr.", "Customer number", "Odd", "Missing")]
-    out = merge_labels(client_for(server), "m", labels, known=["Customer No."])
-    assert out == {"Kd.-Nr.": "Customer No.", "Customer number": "Customer No.", "Odd": "Odd", "Missing": "Missing"}
-    assert "Customer No." in json.dumps(server.requests[0]["body"])
-
-
-def test_merge_table_columns(server):
-    server.reply = lambda body: json.dumps({"mapping": {"Betrag EUR": "Amount"}})
-    out = merge_table_columns(client_for(server), "m", ["Betrag EUR", "Amount"])
-    assert out == {"Betrag EUR": "Amount", "Amount": "Amount"}
-
-
-def test_discover_items_infers_roles_from_labels(server):
-    server.reply = lambda body: json.dumps({"items": [
-        {"label": "Net", "kind": "value", "type": "amount", "value": "100.00"},
-        {"label": "Total Amount", "kind": "value", "type": "amount", "value": "119.00"},
-        {"label": "IBAN", "kind": "value", "type": "iban", "value": "DE89"},
-        {"label": "Gross", "kind": "value", "type": "amount", "role": "net", "value": "1"},  # explicit role wins
-        {"label": "VAT", "kind": "text", "text": "VAT is included."},  # only values get roles
-    ]})
-    items = discover_items(client_for(server), "m", TEXT)
-    assert [i["role"] for i in items] == ["", "gross", "iban", "net", ""]
-
-
-def test_discover_table_column_names_made_unique(server):  # I5a, M2
-    server.reply = lambda body: json.dumps({"items": [
-        {"label": "T", "kind": "table", "columns": ["Description", "", "", "Amount"],
-         "rows": [["Paper", "2", "pcs", "10.00"]]},
-        {"label": "U", "kind": "table", "columns": ["Amount", "Amount"], "rows": [["1", "2"]]},
-        {"label": "V", "kind": "table", "rows": [["a", "b"], ["c"]]}]})
-    t, u, v = discover_items(client_for(server), "m", TEXT)
-    assert t["columns"] == ["Description", "Column 2", "Column 3", "Amount"]
-    assert t["rows"] == [{"Description": "Paper", "Column 2": "2", "Column 3": "pcs", "Amount": "10.00"}]
-    assert u["columns"] == ["Amount", "Amount (2)"] and u["rows"] == [{"Amount": "1", "Amount (2)": "2"}]
-    assert v["columns"] == ["Column 1", "Column 2"] and v["rows"][1] == {"Column 1": "c", "Column 2": ""}
-
-
-def test_discover_prompt_asks_for_every_line(server):
-    server.reply = lambda body: json.dumps({"items": []})
-    discover_items(client_for(server), "m", TEXT)
-    system = server.requests[0]["body"]["messages"][0]["content"]
-    assert "line by line" in system and "15 to 40 items" in system
-
-
-def test_discover_items_salvages_a_broken_answer(server):
-    good = json.dumps({"label": "Invoice No.", "kind": "value", "value": "R-1"})
-    other = json.dumps({"label": "Note", "kind": "text", "text": "Thanks"})
-    server.reply = lambda body: '{"items": [' + good + ", " + other + "]"  # the closing brace is missing
-    assert [i["label"] for i in discover_items(client_for(server), "m", TEXT)] == ["Invoice No.", "Note"]
-    server.reply = lambda body: '{"items": [' + good + ', {"label": "Cut", "kind": "val'  # cut off mid-item
-    assert [i["label"] for i in discover_items(client_for(server), "m", TEXT)] == ["Invoice No."]

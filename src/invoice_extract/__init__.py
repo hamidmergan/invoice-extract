@@ -1,8 +1,7 @@
-"""Turn invoices into one table with columns you choose."""
+"""Turn the invoices you received into one checked table."""
 
 from .columns import KINDS, ROLES, STANDARD_COLUMNS, Column, Template, column, export_columns, role_column
 from .config import Settings, resolve
-from .discover import field_counts, fields_of
 from .core import add_columns, extract, extract_many
 from .errors import ConfigError, InvoiceError, LimitError, ModelError, UnsupportedFileError
 from .export import export
@@ -32,8 +31,6 @@ __all__ = [
     "export_columns",
     "extract",
     "extract_many",
-    "field_counts",
-    "fields_of",
     "resolve",
     "role_column",
 ]

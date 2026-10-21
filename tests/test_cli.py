@@ -5,6 +5,7 @@ import openpyxl
 from pdfgen import write_samples
 
 from invoice_extract.cli import main
+from invoice_extract.columns import STANDARD_COLUMNS
 
 
 def llm_flags(server):
@@ -106,17 +107,13 @@ def test_cli_serve_guards_host_on_loopback(monkeypatch):
     assert client.get("/api/state", headers={"Host": "evil.example"}).status_code == 400
 
 
-def test_cli_discovery_default(tmp_path, server, capsys):
-    pdf = write_samples(tmp_path)[0]
-    server.reply = lambda body: json.dumps({"items": [
-        {"label": "Invoice No.", "kind": "value", "role": "invoice_no", "value": "RE-2026-001",
-         "source_text": "Invoice RE-2026-001", "page": 1},
-        {"label": "Customer No.", "kind": "value", "value": "K-1", "source_text": "K-1", "page": 1}]})
+def test_cli_default_columns_are_standard(tmp_path, server, capsys):
+    xml = write_samples(tmp_path)[2]
     out = tmp_path / "out.xlsx"
-    assert main([str(pdf), "-o", str(out)] + llm_flags(server)) == 0, capsys.readouterr().err
+    assert main([str(xml), "-o", str(out)]) == 0, capsys.readouterr().err
     ws = openpyxl.load_workbook(out)["Invoices"]
-    assert [c.value for c in ws[1]] == ["File", "Invoice No.", "Customer No.", "Status"]
-    assert "Found 2 fields" in capsys.readouterr().err
+    assert [c.value for c in ws[1]] == [c.label for c in STANDARD_COLUMNS]
+    assert server.requests == []
 
 
 def test_cli_einvoice(tmp_path, server, capsys):

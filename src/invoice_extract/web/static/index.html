@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>invoice-extract</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>invoice-extract</h1>
+    <label class="btn primary" id="add-files">
+      Add files
+      <input type="file" id="file-input" multiple accept=".pdf,.xml,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff" hidden>
+    </label>
+    <span class="drop-hint">or drop PDFs, scans and e-invoices anywhere</span>
+    <span class="spacer"></span>
+    <div class="menu" id="export-menu">
+      <button class="btn" id="export-button" aria-haspopup="true" aria-expanded="false">Export ▾</button>
+      <div class="menu-list" hidden>
+        <button class="menu-item" data-format="xlsx">Excel (.xlsx)</button>
+        <button class="menu-item" data-format="csv">CSV (.csv)</button>
+        <button class="menu-item" data-format="json">JSON (.json)</button>
+      </div>
+    </div>
+    <button class="btn" id="clear-button">Clear</button>
+  </header>
+
+  <nav class="strip" id="strip" aria-label="Files"></nav>
+
+  <main class="layout">
+    <section class="viewer card">
+      <div class="viewer-bar">
+        <strong id="viewer-name">No file selected</strong>
+        <span class="spacer"></span>
+        <button class="btn small" id="prev-page" aria-label="Previous page">‹</button>
+        <span id="page-label" class="muted"></span>
+        <button class="btn small" id="next-page" aria-label="Next page">›</button>
+      </div>
+      <p class="muted viewer-help" id="viewer-help">Add invoices to start. Click a spot on a PDF page to pick a field as a new column.</p>
+      <div class="page-wrap" id="page-wrap" hidden>
+        <img id="page-image" alt="Invoice page">
+        <svg id="overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+        <div class="popover" id="popover" hidden>
+          <strong>New column from this field</strong>
+          <label>Column title <input id="popover-title" type="text" autocomplete="off"></label>
+          <p class="muted" id="popover-example"></p>
+          <p class="muted small-text">The model looks for this field by meaning in every invoice.</p>
+          <div class="row-end">
+            <button class="btn" id="popover-cancel">Cancel</button>
+            <button class="btn primary" id="popover-create">Create column</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <section class="card">
+        <div class="card-head">
+          <h2 id="columns-title">Columns</h2>
+          <span class="spacer"></span>
+          <a class="btn small" href="/api/template" download="invoices.yaml">Save as template</a>
+          <label class="btn small">
+            Load template
+            <input type="file" id="template-input" accept=".yaml,.yml" hidden>
+          </label>
+        </div>
+        <div class="chips" id="columns"></div>
+        <form class="add-column" id="add-column">
+          <input id="add-column-label" type="text" placeholder="+ Add column by name" autocomplete="off">
+          <button class="btn small" type="submit">Add</button>
+        </form>
+      </section>
+      <section class="card">
+        <h2>Values</h2>
+        <dl class="values" id="values"></dl>
+      </section>
+      <section class="card">
+        <h2>Checks</h2>
+        <ul class="checks" id="checks"></ul>
+      </section>
+    </aside>
+  </main>
+
+  <section class="results card">
+    <p class="summary" id="summary"></p>
+    <div class="table-wrap">
+      <table id="table"></table>
+    </div>
+  </section>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

@@ -6,10 +6,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import __version__
-from .columns import STANDARD_COLUMNS, Template, column, export_columns
+from .columns import STANDARD_COLUMNS, Template, column
 from .config import resolve
 from .core import extract_many
-from .discover import fields_of
 from .errors import ConfigError, InvoiceError
 from .einvoicing import FORMATS as FORMATS_E
 from .einvoicing import convert_many, output_name, write
@@ -39,9 +38,9 @@ def _model_flags(parser: argparse.ArgumentParser) -> None:
 def _extract_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="invoice-extract",
-        description="Turn invoices (PDF, scans, e-invoices) into one table. Without --template or --column, "
-                    "every field the model finds is exported. Run 'invoice-extract einvoice' to write "
-                    "XRechnung/ZUGFeRD e-invoices and 'invoice-extract serve' for the web UI.",
+        description="Turn the invoices you received (PDF, scans, photos, XRechnung, ZUGFeRD) into one checked "
+                    "table. Run 'invoice-extract serve' for the web page and 'invoice-extract einvoice' to write "
+                    "XRechnung/ZUGFeRD e-invoices.",
     )
     parser.add_argument("files", nargs="+", metavar="FILE", help="PDF, image or XML invoices")
     parser.add_argument("-o", "--output", help="output file (.xlsx, .csv or .json); default invoices.xlsx")
@@ -89,10 +88,8 @@ def _output(value: Optional[str]) -> Path:
     return path
 
 
-def _columns(args: argparse.Namespace) -> Optional[list]:
-    """The columns to fill, or None to export every field the model finds."""
-    if not args.template and not args.column:
-        return None
+def _columns(args: argparse.Namespace) -> list:
+    """The columns to fill: a template's, else the standard columns, plus any --column."""
     cols = list(Template.load(args.template).columns) if args.template else list(STANDARD_COLUMNS)
     for label in args.column:
         cols.append(column(label, existing=[c.key for c in cols]))
@@ -113,10 +110,6 @@ def _run_extract(argv: List[str]) -> int:
         if row.error:
             line += f": {row.error}"
         print(line, file=sys.stderr)
-    if columns is None:
-        fields = fields_of(rows)
-        print(f"Found {len(fields)} fields", file=sys.stderr)
-        columns = export_columns(fields)
     try:
         export(rows, output, columns)
     except OSError as e:

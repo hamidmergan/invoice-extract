@@ -181,27 +181,12 @@ def test_pdf_box_falls_back_to_the_value_in_tables(tmp_path, server):
     assert cell.checks == []
 
 
-def test_extract_many_discovers_and_merges(tmp_path, server):
-    from pdfgen import make_pdf
-    from invoice_extract import fields_of
-    a, b = tmp_path / "a.pdf", tmp_path / "b.pdf"
-    a.write_bytes(make_pdf([[(50, 780, "ACME GmbH Invoice RE-1 Total 119,00 EUR"), (50, 700, "Kd.-Nr. 4711")]]))
-    b.write_bytes(make_pdf([[(50, 780, "Beta Ltd Invoice B-7 Total 50,00 EUR"), (50, 700, "Customer number 4712")]]))
-
-    def reply(body):
-        if system_prompt(body).startswith("You get labels"):
-            return json.dumps({"mapping": {"Kd.-Nr.": "Customer No.", "Customer number": "Customer No."}})
-        if "Kd.-Nr. 4711" in user_content(body):
-            item = {"label": "Kd.-Nr.", "kind": "value", "value": "4711", "source_text": "Kd.-Nr. 4711", "page": 1}
-        else:
-            item = {"label": "Customer number", "kind": "value", "value": "4712",
-                    "source_text": "Customer number 4712", "page": 1}
-        return json.dumps({"items": [item]})
-    server.reply = reply
-    rows = extract_many([a, b], **llm(server))
-    assert [f.label for f in fields_of(rows)] == ["Customer No."]
-    assert [r.cells["customer_no"].value for r in rows] == ["4711", "4712"]
-    assert rows[0].cells["customer_no"].box is not None
+def test_extract_many_defaults_to_standard_columns(tmp_path, server):
+    xml = write_samples(tmp_path)[2]
+    rows = extract_many([xml])
+    assert [c for c in rows[0].cells] == [c.key for c in STANDARD_COLUMNS if c.key != "status"]
+    assert extract(xml).cells["gross"].value == Decimal("119.00")
+    assert server.requests == []
 
 
 def test_einvoices_only_template_mode_no_requests(tmp_path, server):  # Review Focus 5
