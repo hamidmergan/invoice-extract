@@ -22,17 +22,19 @@ If you run your own model, your invoices stay on your own network. Nothing leave
 
 ## Installation
 
+invoice-extract is installed from GitHub:
+
 ```bash
-pip install invoice-extract
+pip install git+https://github.com/hamidmergan/invoice-extract.git
 ```
 
 With the web page:
 
 ```bash
-pip install "invoice-extract[ui]"
+pip install "invoice-extract[ui] @ git+https://github.com/hamidmergan/invoice-extract.git"
 ```
 
-Alternatively, you can install it from the source:
+Alternatively, you can install it from a local copy:
 
 ```bash
 git clone https://github.com/hamidmergan/invoice-extract.git

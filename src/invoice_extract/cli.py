@@ -17,7 +17,10 @@ from .export import FORMATS, export
 
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
 LIMITS = ("max_files", "max_file_mb", "max_pages", "concurrency", "timeout")
-UI_HINT = 'The web UI needs extra packages: pip install "invoice-extract[ui]"'
+UI_HINT = (
+    'The web UI needs extra packages: pip install '
+    '"invoice-extract[ui] @ git+https://github.com/hamidmergan/invoice-extract.git"'
+)
 NO_LOGIN = "Warning: the UI has no login. Only expose it on a trusted network."
 
 

@@ -73,7 +73,11 @@ def test_cli_errors_before_processing(tmp_path, server, capsys):
 def test_cli_serve_without_ui_extra(monkeypatch, capsys):
     monkeypatch.setitem(sys.modules, "uvicorn", None)
     assert main(["serve"]) == 2
-    assert 'pip install "invoice-extract[ui]"' in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert (
+        'pip install "invoice-extract[ui] @ '
+        'git+https://github.com/hamidmergan/invoice-extract.git"'
+    ) in err
 
 
 def test_default_output_not_overwritten(tmp_path, server, monkeypatch, capsys):
