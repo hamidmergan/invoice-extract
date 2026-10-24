@@ -45,7 +45,7 @@ The tool builds on doc-extract (`doc-extract-llm` on PyPI), which already turns 
 - Silently inventing values. An empty cell is better than a wrong one, and every value must be traceable to its source.
 - Uploading files anywhere except the configured `base_url`.
 - Working only for German invoices or one company's layout.
-- Any code, design or branding from KIS.
+- Any code, design or branding from an earlier project.
 
 ## Constraints (from the oss-tools rules)
 
@@ -128,7 +128,7 @@ The current mockup is a review screen:
 - An export button for Excel, CSV and JSON.
 - Values can be edited by hand in the table before export, and an edited value is marked.
 
-The look is plain and modern, with no KIS design:
+The look is plain and modern, with no design taken from elsewhere:
 
 - Neutral colours with one accent.
 - The system font stack.

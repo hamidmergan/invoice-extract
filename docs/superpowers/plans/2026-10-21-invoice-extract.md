@@ -38,7 +38,7 @@
 - Settings order: argument, then env `INVOICE_EXTRACT_*` (api key also `OPENAI_API_KEY`), then default.
 - Everything public is in English (code, comments, messages, CLI help, README, tests, commits).
 - No Co-Authored-By lines in commits.
-- No KIS code or design. No real invoices in the repo.
+- No code or design from an earlier project. No real invoices in the repo.
 - `.gitignore` contains `.DS_Store`.
 - One file is exactly one invoice. One row per file.
 - Before any push, run `grep -rn` for the lab server URL (kept only locally). The push goes to `hamidmergan/invoice-extract`, never `merganh`.
